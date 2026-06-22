@@ -17,6 +17,7 @@ model Profile {
 
   posts    Post[]
   sessions SocialSession[]
+  
 }
 
 model SocialSession {
