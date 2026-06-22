@@ -1,170 +1,311 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { LogOut, MonitorPlay, Video, Camera, Briefcase, Send, Sparkles, Link2, CheckCircle2 } from 'lucide-react';
+import {
+  LogOut, MonitorPlay, Video, Camera, Briefcase, Send, Sparkles,
+  Link2, CheckCircle2, Upload, Clock, Trash2, Pencil, X, Check,
+  CalendarDays, AlertCircle, Loader2, Film, LayoutList, Users
+} from 'lucide-react';
 
-const API_BASE = 'http://localhost:3000/api';
+const API = 'http://localhost:3000/api';
 
-const ICONS = {
-  YOUTUBE_SHORTS: <Video className="w-5 h-5 text-red-500" />,
-  YOUTUBE_LONG: <MonitorPlay className="w-5 h-5 text-red-600" />,
-  TIKTOK: <span className="font-bold text-lg leading-none">t</span>,
-  INSTA_REELS: <Camera className="w-5 h-5 text-pink-500" />,
-  FB_REELS: <span className="font-bold text-blue-600">f</span>,
-  THREADS: <span className="font-bold text-gray-800">@</span>,
-  LINKEDIN: <Briefcase className="w-5 h-5 text-blue-500" />
+// ── Platform config ────────────────────────────────────────────────────────────
+const PLATFORMS = [
+  { id: 'YOUTUBE_SHORTS',  name: 'YouTube Shorts',   color: 'text-red-500',   bg: 'bg-red-500/10',   border: 'border-red-500/30' },
+  { id: 'YOUTUBE_LONG',    name: 'YouTube Long-Form', color: 'text-red-600',   bg: 'bg-red-600/10',   border: 'border-red-600/30' },
+  { id: 'TIKTOK',          name: 'TikTok',            color: 'text-white',     bg: 'bg-slate-700/60', border: 'border-slate-600/30' },
+  { id: 'INSTA_REELS',     name: 'Instagram Reels',   color: 'text-pink-500',  bg: 'bg-pink-500/10',  border: 'border-pink-500/30' },
+  { id: 'FB_REELS',        name: 'Facebook Reels',    color: 'text-blue-500',  bg: 'bg-blue-500/10',  border: 'border-blue-500/30' },
+  { id: 'THREADS',         name: 'Threads',           color: 'text-slate-200', bg: 'bg-slate-700/60', border: 'border-slate-600/30' },
+  { id: 'LINKEDIN',        name: 'LinkedIn',          color: 'text-blue-400',  bg: 'bg-blue-400/10',  border: 'border-blue-400/30' },
+];
+
+const PLATFORM_ICON = {
+  YOUTUBE_SHORTS: <Video className="w-5 h-5" />,
+  YOUTUBE_LONG:   <MonitorPlay className="w-5 h-5" />,
+  TIKTOK:         <span className="font-bold text-base leading-none">t</span>,
+  INSTA_REELS:    <Camera className="w-5 h-5" />,
+  FB_REELS:       <span className="font-bold text-base">f</span>,
+  THREADS:        <span className="font-bold text-base">@</span>,
+  LINKEDIN:       <Briefcase className="w-5 h-5" />,
 };
 
+const STATUS_BADGE = {
+  PENDING:    { label: 'Scheduled',  cls: 'bg-amber-500/15 text-amber-400 border-amber-500/30' },
+  PROCESSING: { label: 'Uploading',  cls: 'bg-blue-500/15  text-blue-400  border-blue-500/30' },
+  SUCCESS:    { label: 'Live',       cls: 'bg-green-500/15 text-green-400 border-green-500/30' },
+  FAILED:     { label: 'Failed',     cls: 'bg-red-500/15   text-red-400   border-red-500/30' },
+};
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+const fmtDate = (d) => new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+const toDatetimeLocal = (d) => new Date(d).toISOString().slice(0, 16);
+const platformLabel = (id) => PLATFORMS.find(p => p.id === id)?.name ?? id;
+const platformCfg   = (id) => PLATFORMS.find(p => p.id === id) ?? PLATFORMS[0];
+
+// ─────────────────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const { activeProfile, logout } = useAuth();
   const navigate = useNavigate();
-  
-  const [selectedPlatforms, setSelectedPlatforms] = useState([]);
-  const [metadata, setMetadata] = useState({});
-  const [linkedSessions, setLinkedSessions] = useState([]);
-  const [activeTab, setActiveTab] = useState('post'); // 'post' or 'accounts'
 
-  const platformsList = [
-    { id: 'YOUTUBE_SHORTS', name: 'YouTube Shorts' },
-    { id: 'YOUTUBE_LONG', name: 'YouTube Long-Form' },
-    { id: 'TIKTOK', name: 'TikTok' },
-    { id: 'INSTA_REELS', name: 'Instagram Reels' },
-    { id: 'FB_REELS', name: 'Facebook Reels' },
-    { id: 'THREADS', name: 'Threads' },
-    { id: 'LINKEDIN', name: 'LinkedIn' }
-  ];
+  const [tab, setTab] = useState('create');                // create | schedule | accounts
+  const [linkedSessions, setLinkedSessions] = useState([]); // array of platform ids
+  const [posts, setPosts] = useState([]);
+  const [loadingPosts, setLoadingPosts] = useState(false);
 
+  // ── Create-post state ──────────────────────────────────────────────────────
+  const [videoFile, setVideoFile]       = useState(null);
+  const [videoPreview, setVideoPreview] = useState(null);
+  const [dragOver, setDragOver]         = useState(false);
+  const [selectedPlats, setSelectedPlats] = useState([]);
+  const [title, setTitle]               = useState('');
+  const [desc, setDesc]                 = useState('');
+  const [scheduleAt, setScheduleAt]     = useState('');
+  const [uploading, setUploading]       = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [createError, setCreateError]   = useState('');
+  const [createSuccess, setCreateSuccess] = useState('');
+  const fileInputRef = useRef();
+
+  // ── Edit-post state ────────────────────────────────────────────────────────
+  const [editId, setEditId]           = useState(null);
+  const [editTitle, setEditTitle]     = useState('');
+  const [editDesc, setEditDesc]       = useState('');
+  const [editDate, setEditDate]       = useState('');
+  const [savingEdit, setSavingEdit]   = useState(false);
+
+  // ── Load on mount ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (activeProfile?.id) {
-      fetchLinkedSessions();
+      fetchSessions();
+      fetchPosts();
     }
   }, [activeProfile]);
 
-  const fetchLinkedSessions = async () => {
+  const fetchSessions = async () => {
     try {
-      const res = await axios.get(`${API_BASE}/sessions/${activeProfile.id}`);
-      setLinkedSessions(res.data.map(s => s.platform));
+      const r = await axios.get(`${API}/sessions/${activeProfile.id}`);
+      setLinkedSessions(r.data.map(s => s.platform));
+    } catch { /* ignore */ }
+  };
+
+  const fetchPosts = async () => {
+    setLoadingPosts(true);
+    try {
+      const r = await axios.get(`${API}/posts/${activeProfile.id}`);
+      setPosts(r.data);
+    } catch { /* ignore */ }
+    finally { setLoadingPosts(false); }
+  };
+
+  // ── Video file handling ────────────────────────────────────────────────────
+  const handleFile = (file) => {
+    if (!file || !file.type.startsWith('video/')) return;
+    setVideoFile(file);
+    setVideoPreview(URL.createObjectURL(file));
+    setCreateError('');
+  };
+
+  const onDrop = useCallback((e) => {
+    e.preventDefault(); setDragOver(false);
+    handleFile(e.dataTransfer.files[0]);
+  }, []);
+
+  const removeVideo = () => {
+    setVideoFile(null);
+    setVideoPreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // ── Toggle platform selection ──────────────────────────────────────────────
+  const togglePlatform = (id) => {
+    if (!linkedSessions.includes(id)) return;
+    setSelectedPlats(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]);
+  };
+
+  // ── Submit post ────────────────────────────────────────────────────────────
+  const handleSubmit = async () => {
+    setCreateError(''); setCreateSuccess('');
+    if (!videoFile)           return setCreateError('Please select a video file.');
+    if (!selectedPlats.length) return setCreateError('Select at least one platform.');
+    if (!scheduleAt)          return setCreateError('Set a schedule date & time.');
+    if (new Date(scheduleAt) <= new Date()) return setCreateError('Schedule time must be in the future.');
+
+    setUploading(true); setUploadProgress(0);
+
+    try {
+      // 1. Get Cloudinary signed upload params
+      const { data: sigData } = await axios.get(`${API}/upload/signature`);
+
+      // 2. Upload to Cloudinary directly (client-side)
+      const formData = new FormData();
+      formData.append('file', videoFile);
+      formData.append('signature', sigData.signature);
+      formData.append('timestamp', sigData.timestamp);
+      formData.append('api_key', sigData.apiKey);
+      formData.append('folder', 'auto_uploader_videos');
+      formData.append('resource_type', 'video');
+
+      const cloudRes = await axios.post(
+        `https://api.cloudinary.com/v1_1/${sigData.cloudName}/video/upload`,
+        formData,
+        { onUploadProgress: (e) => setUploadProgress(Math.round((e.loaded * 100) / e.total)) }
+      );
+      const cloudinaryUrl = cloudRes.data.secure_url;
+
+      // 3. Save post to backend DB
+      await axios.post(`${API}/posts`, {
+        profileId: activeProfile.id,
+        cloudinaryUrl,
+        platforms: selectedPlats,
+        title: title || null,
+        description: desc || null,
+        scheduledAt: scheduleAt,
+      });
+
+      // 4. Reset form
+      setCreateSuccess('🎉 Posts scheduled successfully!');
+      removeVideo();
+      setSelectedPlats([]); setTitle(''); setDesc(''); setScheduleAt('');
+      fetchPosts();
+      setTimeout(() => { setCreateSuccess(''); setTab('schedule'); }, 1800);
+
     } catch (err) {
-      console.error('Failed to fetch sessions', err);
+      setCreateError(err.response?.data?.error || err.message || 'Upload failed.');
+    } finally {
+      setUploading(false); setUploadProgress(0);
     }
   };
 
-  const handleLinkPlatform = async (platformId) => {
+  // ── Link platform ──────────────────────────────────────────────────────────
+  const handleLink = async (pid) => {
     try {
-      alert(`Opening a browser to login to ${platformId}. Please log in on the new window, then return here.`);
-      await axios.get(`${API_BASE}/sessions/link/${activeProfile.id}/${platformId}`);
-      setTimeout(fetchLinkedSessions, 30000);
+      await axios.get(`${API}/sessions/link/${activeProfile.id}/${pid}`);
+      alert(`Browser opened! Log in to ${platformLabel(pid)}, then return here. Session saves in 3 minutes.`);
+      setTimeout(fetchSessions, 60000);
+    } catch { alert('Could not open browser. Make sure backend is running.'); }
+  };
+
+  // ── Edit post ──────────────────────────────────────────────────────────────
+  const startEdit = (post) => {
+    setEditId(post.id);
+    setEditTitle(post.title || '');
+    setEditDesc(post.description || '');
+    setEditDate(toDatetimeLocal(post.scheduledAt));
+  };
+
+  const saveEdit = async () => {
+    setSavingEdit(true);
+    try {
+      await axios.patch(`${API}/posts/${editId}`, { title: editTitle, description: editDesc, scheduledAt: editDate });
+      setEditId(null);
+      fetchPosts();
     } catch (err) {
-      console.error('Error triggering link', err);
-    }
+      alert('Failed to save: ' + (err.response?.data?.error || err.message));
+    } finally { setSavingEdit(false); }
   };
 
-  const handlePlatformToggle = (id) => {
-    setSelectedPlatforms(prev => 
-      prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]
-    );
+  const cancelEdit = () => setEditId(null);
+
+  // ── Delete post ────────────────────────────────────────────────────────────
+  const handleDelete = async (id) => {
+    if (!confirm('Delete this post?')) return;
+    try {
+      await axios.delete(`${API}/posts/${id}`);
+      fetchPosts();
+    } catch { alert('Failed to delete post.'); }
   };
 
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
+  const handleLogout = () => { logout(); navigate('/login'); };
 
+  // ─────────────────────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-[#0f172a] text-slate-200 font-['Outfit'] relative overflow-hidden">
-      {/* Subtle Background Glows */}
-      <div className="fixed top-[-20%] left-[-10%] w-[50vw] h-[50vw] rounded-full bg-indigo-900/10 blur-[120px] pointer-events-none"></div>
-      <div className="fixed bottom-[-20%] right-[-10%] w-[50vw] h-[50vw] rounded-full bg-violet-900/10 blur-[120px] pointer-events-none"></div>
+    <div className="min-h-screen bg-[#080c18] text-slate-200 font-['Outfit'] relative overflow-hidden">
+      {/* Background glows */}
+      <div className="fixed top-[-15%] left-[-5%] w-[55vw] h-[55vw] rounded-full bg-indigo-900/8 blur-[140px] pointer-events-none" />
+      <div className="fixed bottom-[-15%] right-[-5%] w-[50vw] h-[50vw] rounded-full bg-violet-900/8 blur-[140px] pointer-events-none" />
 
-      <header className="sticky top-0 z-50 backdrop-blur-2xl bg-slate-900/60 border-b border-slate-800/50 px-6 py-4 transition-all shadow-sm">
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <header className="sticky top-0 z-50 backdrop-blur-2xl bg-[#080c18]/80 border-b border-slate-800/60 px-6 py-3.5">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
+          {/* Logo + Nav */}
           <div className="flex items-center gap-8">
-            <div className="flex items-center gap-3 group cursor-pointer">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-[0_0_20px_rgba(99,102,241,0.3)] group-hover:shadow-[0_0_30px_rgba(99,102,241,0.5)] transition-all duration-300">
-                <Sparkles className="w-5 h-5 text-white" />
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-[0_0_20px_rgba(99,102,241,0.4)]">
+                <Sparkles className="w-4 h-4 text-white" />
               </div>
-              <h1 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400 group-hover:to-indigo-300 transition-colors">
-                Nexus
-              </h1>
+              <span className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">Nexus</span>
             </div>
-            
-            <nav className="flex gap-6 ml-4">
-              <button 
-                onClick={() => setActiveTab('post')}
-                className={`relative py-2 font-medium transition-colors duration-300 ${activeTab === 'post' ? 'text-indigo-400' : 'text-slate-400 hover:text-slate-200'}`}
-              >
-                Create Post
-                {activeTab === 'post' && (
-                  <span className="absolute bottom-0 left-0 w-full h-0.5 bg-indigo-500 rounded-t-full shadow-[0_0_10px_rgba(99,102,241,0.8)]"></span>
-                )}
-              </button>
-              <button 
-                onClick={() => setActiveTab('accounts')}
-                className={`relative py-2 font-medium transition-colors duration-300 ${activeTab === 'accounts' ? 'text-indigo-400' : 'text-slate-400 hover:text-slate-200'}`}
-              >
-                Linked Accounts
-                {activeTab === 'accounts' && (
-                  <span className="absolute bottom-0 left-0 w-full h-0.5 bg-indigo-500 rounded-t-full shadow-[0_0_10px_rgba(99,102,241,0.8)]"></span>
-                )}
-              </button>
+            <nav className="flex gap-1">
+              {[
+                { id: 'create',   label: 'Create Post',      Icon: Film },
+                { id: 'schedule', label: 'Schedule',         Icon: LayoutList },
+                { id: 'accounts', label: 'Linked Accounts',  Icon: Users },
+              ].map(({ id, label, Icon }) => (
+                <button
+                  key={id}
+                  onClick={() => setTab(id)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200 ${
+                    tab === id
+                      ? 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/30'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />{label}
+                </button>
+              ))}
             </nav>
           </div>
-          
-          <div className="flex items-center gap-5">
-            <div className="px-4 py-2 rounded-xl bg-slate-800/50 border border-slate-700/50 flex items-center gap-2 backdrop-blur-md">
-              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-              <span className="text-sm text-slate-400">Profile:</span>
-              <span className="text-sm font-semibold text-indigo-300">{activeProfile?.name}</span>
+          {/* Profile + Logout */}
+          <div className="flex items-center gap-3">
+            <div className="px-3 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/50 flex items-center gap-2">
+              <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+              <span className="text-xs text-slate-400">Profile:</span>
+              <span className="text-xs font-semibold text-indigo-300">{activeProfile?.name}</span>
             </div>
-            <button 
-              onClick={handleLogout}
-              className="p-2.5 rounded-xl hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-all duration-300 group"
-              title="Logout"
-            >
-              <LogOut className="w-5 h-5 group-hover:scale-110 transition-transform" />
+            <button onClick={handleLogout} className="p-2 rounded-lg hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-all" title="Logout">
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto p-6 mt-6 relative z-10">
-        {activeTab === 'post' && (
-          <div className="grid lg:grid-cols-12 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
-            {/* Target Networks Selection */}
-            <div className="lg:col-span-4 space-y-6">
-              <div className="bg-slate-900/40 backdrop-blur-xl border border-slate-700/50 rounded-3xl p-6 shadow-2xl relative overflow-hidden group hover:border-indigo-500/30 transition-colors duration-500">
-                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-violet-600 opacity-50 group-hover:opacity-100 transition-opacity"></div>
-                <h2 className="text-xl font-semibold mb-6 text-white flex items-center gap-2">
-                  <Send className="w-5 h-5 text-indigo-400" />
-                  Target Networks
+      <main className="max-w-7xl mx-auto px-6 py-8 relative z-10">
+
+        {/* ══════════════════ TAB: CREATE POST ══════════════════ */}
+        {tab === 'create' && (
+          <div className="grid lg:grid-cols-12 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+
+            {/* Left: Platform selector */}
+            <div className="lg:col-span-4 space-y-4">
+              <div className="bg-slate-900/40 backdrop-blur-xl border border-slate-800/60 rounded-2xl p-5">
+                <h2 className="text-base font-semibold text-white mb-4 flex items-center gap-2">
+                  <Send className="w-4 h-4 text-indigo-400" /> Target Platforms
                 </h2>
-                <div className="flex flex-col gap-3">
-                  {platformsList.map(p => {
-                    const isSelected = selectedPlatforms.includes(p.id);
-                    const isLinked = linkedSessions.includes(p.id);
+                <div className="space-y-2">
+                  {PLATFORMS.map(p => {
+                    const isLinked   = linkedSessions.includes(p.id);
+                    const isSelected = selectedPlats.includes(p.id);
                     return (
                       <button
                         key={p.id}
-                        onClick={() => isLinked && handlePlatformToggle(p.id)}
+                        onClick={() => togglePlatform(p.id)}
                         disabled={!isLinked}
-                        className={`flex items-center gap-4 p-4 rounded-2xl border transition-all duration-300 transform ${
-                          !isLinked ? 'opacity-40 cursor-not-allowed bg-slate-950/50 border-slate-800' :
-                          isSelected 
-                            ? 'bg-indigo-500/10 border-indigo-500/50 shadow-[0_0_20px_rgba(99,102,241,0.15)] scale-[1.02]' 
-                            : 'bg-slate-800/30 border-slate-700/50 hover:bg-slate-800/80 hover:border-slate-600 hover:scale-[1.01]'
+                        className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all duration-200 ${
+                          !isLinked
+                            ? 'opacity-35 cursor-not-allowed bg-slate-950/30 border-slate-800/50'
+                            : isSelected
+                              ? `${p.bg} ${p.border} border shadow-md`
+                              : 'bg-slate-800/20 border-slate-700/40 hover:bg-slate-800/60 hover:border-slate-600'
                         }`}
                       >
-                        <div className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-300 shadow-inner ${
-                          isSelected ? 'bg-white shadow-[0_0_15px_rgba(255,255,255,0.2)]' : 'bg-slate-800/80'
-                        }`}>
-                          {ICONS[p.id]}
+                        <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${isSelected ? 'bg-white/10' : 'bg-slate-800/80'} ${p.color}`}>
+                          {PLATFORM_ICON[p.id]}
                         </div>
-                        <span className={`font-medium text-left flex-1 ${isSelected ? 'text-white' : 'text-slate-300'}`}>
-                          {p.name}
-                        </span>
-                        {!isLinked && <span className="text-xs font-medium px-2 py-1 bg-slate-800 rounded-md text-slate-500">Unlinked</span>}
-                        {isLinked && isSelected && <CheckCircle2 className="w-5 h-5 text-indigo-400" />}
+                        <span className={`text-sm font-medium flex-1 text-left ${isSelected ? 'text-white' : 'text-slate-300'}`}>{p.name}</span>
+                        {!isLinked && <span className="text-[10px] font-medium px-1.5 py-0.5 bg-slate-800 rounded text-slate-500">Unlinked</span>}
+                        {isLinked && isSelected && <CheckCircle2 className={`w-4 h-4 ${p.color}`} />}
                       </button>
                     );
                   })}
@@ -172,108 +313,272 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Metadata Configuration */}
-            <div className="lg:col-span-8 space-y-6">
-              {selectedPlatforms.length === 0 ? (
-                <div className="h-full min-h-[500px] flex flex-col items-center justify-center border-2 border-dashed border-slate-700/50 rounded-3xl bg-slate-900/20 text-slate-500 backdrop-blur-sm">
-                  <div className="w-20 h-20 rounded-full bg-slate-800/50 flex items-center justify-center mb-6">
-                    <Send className="w-10 h-10 opacity-40" />
-                  </div>
-                  <h3 className="text-xl font-medium text-slate-300 mb-2">No Networks Selected</h3>
-                  <p className="text-slate-500">Select one or more linked networks from the left to configure your post.</p>
-                </div>
-              ) : (
-                <div className="space-y-6">
-                  {selectedPlatforms.map(platformId => {
-                    const platform = platformsList.find(p => p.id === platformId);
-                    return (
-                      <div key={platformId} className="bg-slate-900/60 backdrop-blur-xl border border-slate-700/50 rounded-3xl p-8 shadow-2xl group hover:border-indigo-500/40 transition-all duration-500 animate-in slide-in-from-right-8">
-                        <div className="flex items-center gap-4 mb-8 pb-5 border-b border-slate-800">
-                          <div className="w-12 h-12 rounded-xl bg-white flex items-center justify-center shadow-lg">
-                            {ICONS[platformId]}
-                          </div>
-                          <div>
-                            <h3 className="font-semibold text-xl text-white">
-                              {platform.name}
-                            </h3>
-                            <p className="text-sm text-slate-400">Configure post metadata specifically for this platform.</p>
-                          </div>
-                        </div>
-                        <div className="space-y-6">
-                          <div className="group/input">
-                            <label className="block text-sm font-medium text-slate-400 mb-2 transition-colors group-focus-within/input:text-indigo-400">Post Title</label>
-                            <input 
-                              type="text" 
-                              className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-5 py-3.5 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all shadow-inner"
-                              placeholder="Enter a catchy title..."
-                              onChange={(e) => setMetadata(prev => ({...prev, [platformId]: {...prev[platformId], title: e.target.value}}))}
-                            />
-                          </div>
-                          <div className="group/input">
-                            <label className="block text-sm font-medium text-slate-400 mb-2 transition-colors group-focus-within/input:text-indigo-400">Description / Caption</label>
-                            <textarea 
-                              className="w-full bg-slate-950/50 border border-slate-800 rounded-xl px-5 py-4 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none transition-all shadow-inner"
-                              rows="4"
-                              placeholder="Write your caption here... #hashtags"
-                              onChange={(e) => setMetadata(prev => ({...prev, [platformId]: {...prev[platformId], desc: e.target.value}}))}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                  <div className="flex justify-end pt-6 sticky bottom-6 z-20">
-                    <button className="bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-medium px-10 py-4 rounded-2xl shadow-[0_0_30px_rgba(99,102,241,0.3)] hover:shadow-[0_0_40px_rgba(99,102,241,0.5)] hover:-translate-y-1 transition-all flex items-center gap-3 group cursor-pointer">
-                      <span className="text-lg">Schedule All Posts</span>
-                      <Send className="w-5 h-5 transform group-hover:translate-x-1 transition-transform" />
+            {/* Right: Upload + form */}
+            <div className="lg:col-span-8 space-y-5">
+
+              {/* Video drop zone */}
+              <div className="bg-slate-900/40 backdrop-blur-xl border border-slate-800/60 rounded-2xl p-5">
+                <h2 className="text-base font-semibold text-white mb-4 flex items-center gap-2">
+                  <Upload className="w-4 h-4 text-indigo-400" /> Upload Video
+                </h2>
+                {videoPreview ? (
+                  <div className="relative rounded-xl overflow-hidden border border-slate-700/50">
+                    <video src={videoPreview} controls className="w-full max-h-60 object-contain bg-slate-950" />
+                    <button
+                      onClick={removeVideo}
+                      className="absolute top-2 right-2 p-1.5 bg-slate-900/80 rounded-lg text-slate-300 hover:text-red-400 hover:bg-red-400/10 transition-all border border-slate-700/50"
+                    >
+                      <X className="w-4 h-4" />
                     </button>
+                    <div className="p-2 bg-slate-900/70 text-xs text-slate-400 truncate">{videoFile?.name}</div>
+                  </div>
+                ) : (
+                  <div
+                    onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                    onDragLeave={() => setDragOver(false)}
+                    onDrop={onDrop}
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`flex flex-col items-center justify-center gap-3 py-14 rounded-xl border-2 border-dashed cursor-pointer transition-all duration-300 ${
+                      dragOver ? 'border-indigo-500 bg-indigo-500/10 scale-[1.01]' : 'border-slate-700/60 hover:border-indigo-500/50 hover:bg-slate-800/30'
+                    }`}
+                  >
+                    <div className="w-14 h-14 rounded-full bg-slate-800/80 flex items-center justify-center">
+                      <Video className="w-7 h-7 text-indigo-400 opacity-70" />
+                    </div>
+                    <div className="text-center">
+                      <p className="text-slate-300 font-medium">Drag & drop your video here</p>
+                      <p className="text-slate-500 text-sm mt-1">or click to browse — MP4, MOV, AVI, etc.</p>
+                    </div>
+                  </div>
+                )}
+                <input ref={fileInputRef} type="file" accept="video/*" className="hidden" onChange={(e) => handleFile(e.target.files[0])} />
+              </div>
+
+              {/* Post Details */}
+              <div className="bg-slate-900/40 backdrop-blur-xl border border-slate-800/60 rounded-2xl p-5 space-y-4">
+                <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                  <Pencil className="w-4 h-4 text-indigo-400" /> Post Details
+                </h2>
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1.5">Title <span className="text-slate-600">(optional)</span></label>
+                  <input
+                    type="text"
+                    value={title}
+                    onChange={e => setTitle(e.target.value)}
+                    placeholder="Enter a catchy title..."
+                    className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 transition-all text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1.5">Description / Caption <span className="text-slate-600">(optional)</span></label>
+                  <textarea
+                    value={desc}
+                    onChange={e => setDesc(e.target.value)}
+                    rows="3"
+                    placeholder="Write your caption here... #hashtags"
+                    className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 resize-none transition-all text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1.5 flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5" /> Schedule Date & Time</label>
+                  <input
+                    type="datetime-local"
+                    value={scheduleAt}
+                    onChange={e => setScheduleAt(e.target.value)}
+                    className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 transition-all text-sm [color-scheme:dark]"
+                  />
+                </div>
+              </div>
+
+              {/* Error / Success */}
+              {createError && (
+                <div className="flex items-center gap-2 p-3.5 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm">
+                  <AlertCircle className="w-4 h-4 shrink-0" />{createError}
+                </div>
+              )}
+              {createSuccess && (
+                <div className="flex items-center gap-2 p-3.5 bg-green-500/10 border border-green-500/30 rounded-xl text-green-400 text-sm">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />{createSuccess}
+                </div>
+              )}
+
+              {/* Upload Progress */}
+              {uploading && (
+                <div className="space-y-2">
+                  <div className="flex justify-between text-xs text-slate-400">
+                    <span className="flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Uploading to Cloudinary...</span>
+                    <span>{uploadProgress}%</span>
+                  </div>
+                  <div className="w-full bg-slate-800 rounded-full h-1.5">
+                    <div className="h-1.5 bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }} />
                   </div>
                 </div>
               )}
+
+              {/* Submit */}
+              <div className="flex justify-end">
+                <button
+                  onClick={handleSubmit}
+                  disabled={uploading}
+                  className="flex items-center gap-2.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium px-8 py-3.5 rounded-xl shadow-[0_0_25px_rgba(99,102,241,0.3)] hover:shadow-[0_0_35px_rgba(99,102,241,0.5)] hover:-translate-y-0.5 transition-all"
+                >
+                  {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  {uploading ? 'Uploading...' : 'Schedule Posts'}
+                </button>
+              </div>
             </div>
           </div>
         )}
 
-        {activeTab === 'accounts' && (
-          <div className="animate-in fade-in slide-in-from-bottom-4 duration-700">
-            <div className="bg-slate-900/40 backdrop-blur-2xl border border-slate-700/50 rounded-3xl p-10 shadow-2xl max-w-5xl mx-auto relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 rounded-full blur-[80px] pointer-events-none"></div>
-              
-              <div className="mb-10 text-center">
-                <h2 className="text-3xl font-bold text-white mb-3 tracking-tight">Linked Social Accounts</h2>
-                <p className="text-slate-400 max-w-2xl mx-auto text-lg">Connect your social media profiles to Nexus to automate cross-platform posting seamlessly.</p>
-              </div>
+        {/* ══════════════════ TAB: SCHEDULE ══════════════════ */}
+        {tab === 'schedule' && (
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                <LayoutList className="w-5 h-5 text-indigo-400" /> Scheduled Posts
+              </h2>
+              <button onClick={fetchPosts} className="text-xs text-slate-400 hover:text-slate-200 transition-colors flex items-center gap-1.5">
+                <Loader2 className={`w-3.5 h-3.5 ${loadingPosts ? 'animate-spin' : ''}`} /> Refresh
+              </button>
+            </div>
 
-              <div className="grid md:grid-cols-2 gap-6">
-                {platformsList.map(p => {
+            {loadingPosts ? (
+              <div className="flex items-center justify-center py-24 text-slate-500">
+                <Loader2 className="w-8 h-8 animate-spin mr-3" /> Loading posts...
+              </div>
+            ) : posts.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-24 border-2 border-dashed border-slate-800/60 rounded-2xl text-slate-500">
+                <CalendarDays className="w-12 h-12 mb-4 opacity-30" />
+                <p className="font-medium text-slate-400">No posts scheduled yet</p>
+                <p className="text-sm mt-1">Go to Create Post tab to add your first post.</p>
+                <button onClick={() => setTab('create')} className="mt-5 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-xl transition-all">
+                  Create Post
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {posts.map(post => {
+                  const cfg  = platformCfg(post.platform);
+                  const s    = STATUS_BADGE[post.status] ?? STATUS_BADGE.PENDING;
+                  const editing = editId === post.id;
+                  return (
+                    <div key={post.id} className={`bg-slate-900/50 backdrop-blur-md border rounded-2xl p-5 transition-all duration-300 ${editing ? 'border-indigo-500/40' : 'border-slate-800/60 hover:border-slate-700/60'}`}>
+                      {editing ? (
+                        /* ── Edit mode ── */
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2 mb-3">
+                            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${cfg.bg} ${cfg.color}`}>{PLATFORM_ICON[post.platform]}</div>
+                            <span className="text-sm font-medium text-slate-300">{platformLabel(post.platform)}</span>
+                            <span className="ml-auto text-xs text-indigo-400">Editing...</span>
+                          </div>
+                          <input
+                            value={editTitle}
+                            onChange={e => setEditTitle(e.target.value)}
+                            placeholder="Title"
+                            className="w-full bg-slate-950/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
+                          />
+                          <textarea
+                            value={editDesc}
+                            onChange={e => setEditDesc(e.target.value)}
+                            rows="2"
+                            placeholder="Description"
+                            className="w-full bg-slate-950/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 resize-none"
+                          />
+                          <input
+                            type="datetime-local"
+                            value={editDate}
+                            onChange={e => setEditDate(e.target.value)}
+                            className="w-full bg-slate-950/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 [color-scheme:dark]"
+                          />
+                          <div className="flex gap-2 pt-1">
+                            <button onClick={saveEdit} disabled={savingEdit} className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-xl transition-all disabled:opacity-50">
+                              {savingEdit ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} Save
+                            </button>
+                            <button onClick={cancelEdit} className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-xl transition-all">
+                              <X className="w-3.5 h-3.5" /> Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        /* ── View mode ── */
+                        <div className="flex items-start gap-4">
+                          {/* Platform icon */}
+                          <div className={`w-10 h-10 rounded-xl shrink-0 flex items-center justify-center ${cfg.bg} ${cfg.color} border ${cfg.border}`}>
+                            {PLATFORM_ICON[post.platform]}
+                          </div>
+                          {/* Info */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-semibold text-slate-100 truncate">{post.title || <span className="text-slate-500 italic">No title</span>}</span>
+                              <span className={`text-[11px] font-medium px-2 py-0.5 rounded-md border ${s.cls}`}>{s.label}</span>
+                              <span className={`text-[11px] font-medium px-2 py-0.5 rounded-md border ${cfg.bg} ${cfg.color} ${cfg.border}`}>{platformLabel(post.platform)}</span>
+                            </div>
+                            {post.description && <p className="text-sm text-slate-400 mt-1 line-clamp-2">{post.description}</p>}
+                            <div className="flex items-center gap-1.5 mt-2 text-xs text-slate-500">
+                              <Clock className="w-3 h-3" /> {fmtDate(post.scheduledAt)}
+                            </div>
+                            {post.status === 'FAILED' && post.errorMessage && (
+                              <div className="mt-2 flex items-center gap-1.5 text-xs text-red-400">
+                                <AlertCircle className="w-3 h-3" /> {post.errorMessage}
+                              </div>
+                            )}
+                          </div>
+                          {/* Video thumb */}
+                          {post.cloudinaryUrl && (
+                            <video src={post.cloudinaryUrl} className="w-20 h-14 rounded-xl object-cover border border-slate-700/50 shrink-0" muted />
+                          )}
+                          {/* Actions */}
+                          <div className="flex gap-1 shrink-0">
+                            {post.status === 'PENDING' && (
+                              <button onClick={() => startEdit(post)} className="p-2 rounded-lg text-slate-400 hover:text-indigo-400 hover:bg-indigo-500/10 transition-all" title="Edit">
+                                <Pencil className="w-4 h-4" />
+                              </button>
+                            )}
+                            <button onClick={() => handleDelete(post.id)} className="p-2 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-all" title="Delete">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ══════════════════ TAB: LINKED ACCOUNTS ══════════════════ */}
+        {tab === 'accounts' && (
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="bg-slate-900/40 backdrop-blur-xl border border-slate-800/60 rounded-2xl p-8 max-w-3xl mx-auto">
+              <div className="text-center mb-8">
+                <h2 className="text-2xl font-bold text-white mb-2">Linked Social Accounts</h2>
+                <p className="text-slate-400 text-sm">Connect your accounts to enable automated posting.</p>
+              </div>
+              <div className="grid sm:grid-cols-2 gap-4">
+                {PLATFORMS.map(p => {
                   const isLinked = linkedSessions.includes(p.id);
                   return (
-                    <div key={p.id} className="flex items-center justify-between p-5 bg-slate-950/40 border border-slate-800 rounded-2xl hover:border-slate-600 transition-colors group">
-                      <div className="flex items-center gap-5">
-                        <div className="w-14 h-14 rounded-xl bg-slate-800/80 flex items-center justify-center shadow-inner group-hover:bg-slate-800 transition-colors">
-                          {ICONS[p.id]}
-                        </div>
-                        <div>
-                          <h3 className="font-semibold text-lg text-slate-200">{p.name}</h3>
-                          <div className="flex items-center gap-1.5 mt-1">
-                            <div className={`w-2 h-2 rounded-full ${isLinked ? 'bg-green-400 animate-pulse' : 'bg-slate-600'}`}></div>
-                            <p className={`text-sm ${isLinked ? 'text-green-400' : 'text-slate-500'}`}>
-                              {isLinked ? 'Connected Active' : 'Not Connected'}
-                            </p>
-                          </div>
+                    <div key={p.id} className={`flex items-center gap-4 p-4 rounded-xl border transition-all duration-300 ${isLinked ? `${p.bg} ${p.border}` : 'bg-slate-950/30 border-slate-800/60'}`}>
+                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${isLinked ? 'bg-white/10' : 'bg-slate-800/80'} ${p.color} shrink-0`}>
+                        {PLATFORM_ICON[p.id]}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-semibold text-slate-100 text-sm">{p.name}</p>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <div className={`w-1.5 h-1.5 rounded-full ${isLinked ? 'bg-green-400 animate-pulse' : 'bg-slate-600'}`} />
+                          <p className={`text-xs ${isLinked ? 'text-green-400' : 'text-slate-500'}`}>{isLinked ? 'Connected' : 'Not Connected'}</p>
                         </div>
                       </div>
                       {isLinked ? (
-                        <div className="p-3 text-green-400 bg-green-400/10 rounded-xl border border-green-400/20">
-                          <CheckCircle2 className="w-6 h-6" />
-                        </div>
+                        <CheckCircle2 className="w-5 h-5 text-green-400 shrink-0" />
                       ) : (
-                        <button 
-                          onClick={() => handleLinkPlatform(p.id)}
-                          className="flex items-center gap-2 px-5 py-2.5 bg-slate-800 hover:bg-indigo-600 text-white text-sm font-medium rounded-xl transition-all duration-300 border border-slate-700 hover:border-indigo-500 hover:shadow-[0_0_15px_rgba(99,102,241,0.3)] cursor-pointer"
+                        <button
+                          onClick={() => handleLink(p.id)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white text-xs font-medium rounded-lg transition-all duration-300 border border-slate-700 hover:border-indigo-500 shrink-0"
                         >
-                          <Link2 className="w-4 h-4" />
-                          Connect
+                          <Link2 className="w-3.5 h-3.5" /> Connect
                         </button>
                       )}
                     </div>
@@ -283,6 +588,7 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
       </main>
     </div>
   );
