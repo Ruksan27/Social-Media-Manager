@@ -2,18 +2,18 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { LogOut, MonitorPlay, Youtube, Instagram, Linkedin, Send, Sparkles, Link2, CheckCircle2 } from 'lucide-react';
+import { LogOut, MonitorPlay, Video, Camera, Briefcase, Send, Sparkles, Link2, CheckCircle2 } from 'lucide-react';
 
 const API_BASE = 'http://localhost:3000/api';
 
 const ICONS = {
-  YOUTUBE_SHORTS: <Youtube className="w-5 h-5 text-red-500" />,
+  YOUTUBE_SHORTS: <Video className="w-5 h-5 text-red-500" />,
   YOUTUBE_LONG: <MonitorPlay className="w-5 h-5 text-red-600" />,
   TIKTOK: <span className="font-bold text-lg leading-none">t</span>,
-  INSTA_REELS: <Instagram className="w-5 h-5 text-pink-500" />,
+  INSTA_REELS: <Camera className="w-5 h-5 text-pink-500" />,
   FB_REELS: <span className="font-bold text-blue-600">f</span>,
   THREADS: <span className="font-bold text-gray-800">@</span>,
-  LINKEDIN: <Linkedin className="w-5 h-5 text-blue-500" />
+  LINKEDIN: <Briefcase className="w-5 h-5 text-blue-500" />
 };
 
 export default function Dashboard() {
