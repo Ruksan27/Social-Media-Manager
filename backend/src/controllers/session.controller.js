@@ -69,6 +69,17 @@ const STEALTH_SCRIPT = `
       : originalQuery(params);
 `;
 
+// ─── Login detection URLs — when URL leaves these paths, user is logged in ────
+const LOGIN_URL_PATTERNS = {
+  YOUTUBE_SHORTS: ['accounts.google.com'],
+  YOUTUBE_LONG:   ['accounts.google.com'],
+  TIKTOK:         ['tiktok.com/login'],
+  INSTA_REELS:    ['instagram.com/accounts/login'],
+  FB_REELS:       ['facebook.com/login'],
+  THREADS:        ['threads.net/login'],
+  LINKEDIN:       ['linkedin.com/login', 'linkedin.com/checkpoint'],
+};
+
 // ─── Main link session handler ────────────────────────────────────────────────
 exports.linkSession = async (req, res) => {
   const { profileId, platform } = req.params;
@@ -79,11 +90,10 @@ exports.linkSession = async (req, res) => {
 
   // Respond immediately — browser opens in background
   res.status(200).json({
-    message: 'Browser opened. Please complete the login in the opened window. You have 3 minutes.',
+    message: 'Browser opened. Please log in — we\'ll detect it automatically.',
   });
 
   // Per-profile, per-platform persistent data directory
-  // Re-using this dir means Google recognises the browser as a "returning user"
   const profileDataDir = path.join(USER_DATA_DIR, profileId, platform);
   if (!fs.existsSync(profileDataDir)) {
     fs.mkdirSync(profileDataDir, { recursive: true });
@@ -94,13 +104,11 @@ exports.linkSession = async (req, res) => {
     console.log(`   Chrome path: ${CHROME_PATH}`);
     console.log(`   User data:   ${profileDataDir}\n`);
 
-    // launchPersistentContext uses the real Chrome binary + the user's own profile
-    // folder. Google sees this as a real returning user, not an automation tool.
     const context = await chromium.launchPersistentContext(profileDataDir, {
       headless: false,
-      executablePath: CHROME_PATH,          // ← KEY: real Chrome, not bundled Chromium
+      executablePath: CHROME_PATH,
       args: [
-        '--disable-blink-features=AutomationControlled',  // hide CDP automation flag
+        '--disable-blink-features=AutomationControlled',
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-extensions-except=',
@@ -108,7 +116,7 @@ exports.linkSession = async (req, res) => {
         '--window-size=1280,800',
         '--start-maximized',
       ],
-      viewport: null,                        // null = use window size (more realistic)
+      viewport: null,
       userAgent:
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
       locale: 'en-US',
@@ -116,7 +124,6 @@ exports.linkSession = async (req, res) => {
       ignoreHTTPSErrors: true,
     });
 
-    // Inject stealth overrides into every new page/frame
     await context.addInitScript(STEALTH_SCRIPT);
 
     const page = context.pages()[0] || await context.newPage();
@@ -126,9 +133,35 @@ exports.linkSession = async (req, res) => {
       timeout: 30000,
     });
 
-    // ── Wait for user to complete login (3 minutes) ──────────────────────────
-    console.log('⏳ Waiting 3 minutes for you to log in...');
-    await page.waitForTimeout(3 * 60 * 1000);
+    // ── Smart login detection ────────────────────────────────────────────────
+    // Instead of waiting a fixed 3 minutes, poll every 5 seconds to check if
+    // the URL has left the login page. Proceeds within seconds of login.
+    const loginPatterns = LOGIN_URL_PATTERNS[platform] || [];
+    const MAX_WAIT_MS = 3 * 60 * 1000; // 3 min hard limit
+    const POLL_INTERVAL = 5000;         // check every 5s
+    const startTime = Date.now();
+
+    const isStillOnLoginPage = (url) => {
+      return loginPatterns.some(pattern => url.includes(pattern));
+    };
+
+    console.log('⏳ Waiting for login (auto-detects when you finish)...');
+    while (Date.now() - startTime < MAX_WAIT_MS) {
+      await page.waitForTimeout(POLL_INTERVAL);
+      try {
+        const currentUrl = page.url();
+        if (!isStillOnLoginPage(currentUrl)) {
+          const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+          console.log(`✅ Login detected in ${elapsed}s! URL: ${currentUrl}`);
+          // Give the page a moment to fully settle after redirect
+          await page.waitForTimeout(3000);
+          break;
+        }
+      } catch {
+        // Page might be navigating, ignore and retry
+      }
+    }
+    console.log('🔄 Proceeding to capture session...');
 
     // ── Detect Logged-In Username ────────────────────────────────────────────
     let username = 'Connected Account';

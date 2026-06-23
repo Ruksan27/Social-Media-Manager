@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import api from '../api';
 import {
   LogOut, MonitorPlay, Video, Camera, Briefcase, Send, Sparkles,
@@ -161,23 +162,46 @@ export default function Dashboard() {
       // 1. Get Cloudinary signed upload params
       const { data: sigData } = await api.get('/upload/signature');
 
-      // 2. Upload directly to Cloudinary
+      // 2. Upload directly to Cloudinary using RAW axios (not api instance)
+      //    The api instance has withCredentials:true which causes CORS
+      //    preflight failures with Cloudinary — that's the "network error at 50%"
       const formData = new FormData();
       formData.append('file', videoFile);
       formData.append('signature', sigData.signature);
       formData.append('timestamp', sigData.timestamp);
       formData.append('api_key', sigData.apiKey);
       formData.append('folder', 'auto_uploader_videos');
-      formData.append('resource_type', 'video');
 
-      const cloudRes = await api.post(
-        `https://api.cloudinary.com/v1_1/${sigData.cloudName}/video/upload`,
-        formData,
-        {
-          withCredentials: false, // Cloudinary doesn't need our cookie
-          onUploadProgress: (e) => setUploadProgress(Math.round((e.loaded * 100) / e.total))
+      const cloudinaryUrl_endpoint = `https://api.cloudinary.com/v1_1/${sigData.cloudName}/video/upload`;
+
+      // Retry upload up to 3 times with exponential backoff
+      let cloudRes = null;
+      let lastErr = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          cloudRes = await axios.post(cloudinaryUrl_endpoint, formData, {
+            timeout: 0,                // no client-side timeout for large videos
+            withCredentials: false,     // CRITICAL: Cloudinary doesn't accept credentials
+            maxContentLength: Infinity, // allow large files
+            maxBodyLength: Infinity,    // allow large files
+            onUploadProgress: (e) => {
+              if (e.total) setUploadProgress(Math.round((e.loaded * 100) / e.total));
+            },
+          });
+          break; // success — exit retry loop
+        } catch (err) {
+          lastErr = err;
+          if (err.response) throw err; // Cloudinary returned a real error (4xx/5xx), don't retry
+          if (attempt < 3) {
+            const delay = 1000 * Math.pow(2, attempt);
+            console.warn(`⏳ Upload attempt ${attempt} failed, retrying in ${delay}ms...`);
+            setUploadProgress(0);
+            await new Promise(r => setTimeout(r, delay));
+          }
         }
-      );
+      }
+      if (!cloudRes) throw lastErr || new Error('Upload failed after retries.');
+
       const cloudinaryUrl = cloudRes.data.secure_url;
 
       // 3. Save post to backend
@@ -197,7 +221,8 @@ export default function Dashboard() {
       setTimeout(() => { setCreateSuccess(''); setTab('schedule'); }, 1800);
 
     } catch (err) {
-      setCreateError(err.response?.data?.error || err.message || 'Upload failed.');
+      const msg = err.response?.data?.error?.message || err.response?.data?.error || err.message || 'Upload failed.';
+      setCreateError(msg);
     } finally {
       setUploading(false); setUploadProgress(0);
     }
@@ -217,28 +242,30 @@ export default function Dashboard() {
   const handleLink = async (pid) => {
     try {
       setLinkingPid(pid);
-      setLinkNotice(`🌐 Browser opened for ${platformLabel(pid)}. Log in there — session saves automatically in 3 minutes.`);
+      setLinkNotice(`🌐 Browser opened for ${platformLabel(pid)}. Log in — we'll detect it automatically and save your session.`);
       await api.get(`/sessions/link/${activeProfile.id}/${pid}`);
 
-      // Poll every 30 s so the card flips to green as soon as the session is saved
+      // Poll every 10s — backend now detects login quickly so session saves faster
       const poll = setInterval(async () => {
         await fetchSessions();
-        // Stop polling once we detect the session is saved
         setLinkedSessions(prev => {
           if (prev.some(s => s.platform === pid)) {
             clearInterval(poll);
             setLinkingPid(null);
-            setLinkNotice('');
+            setLinkNotice('✅ Login detected & session saved!');
+            setTimeout(() => setLinkNotice(''), 3000);
           }
           return prev;
         });
-      }, 30000);
+      }, 10000);
 
       // Hard stop after 4 minutes regardless
       setTimeout(() => {
         clearInterval(poll);
         setLinkingPid(null);
-        setLinkNotice('');
+        if (linkNotice.includes('Browser opened')) {
+          setLinkNotice('');
+        }
         fetchSessions();
       }, 4 * 60 * 1000);
 
@@ -624,16 +651,37 @@ export default function Dashboard() {
               )}
 
               {uploading && (
-                <div className="space-y-2">
-                  <div className="flex justify-between text-xs text-slate-400">
-                    <span className="flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Uploading to Cloudinary...</span>
-                    <span>{uploadProgress}%</span>
+                <div className="space-y-3 p-4 bg-slate-900/60 border border-indigo-500/20 rounded-xl">
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="flex items-center gap-2 text-indigo-300 font-medium">
+                      <Loader2 className="w-4 h-4 animate-spin" /> Uploading to Cloudinary...
+                    </span>
+                    <span className="text-white font-bold tabular-nums">{uploadProgress}%</span>
                   </div>
-                  <div className="w-full bg-slate-800 rounded-full h-1.5">
-                    <div className="h-1.5 bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }} />
+                  <div className="w-full bg-slate-800/80 rounded-full h-2.5 overflow-hidden">
+                    <div
+                      className="h-2.5 rounded-full transition-all duration-500 ease-out"
+                      style={{
+                        width: `${uploadProgress}%`,
+                        background: 'linear-gradient(90deg, #6366f1, #8b5cf6, #a78bfa, #8b5cf6, #6366f1)',
+                        backgroundSize: '200% 100%',
+                        animation: 'shimmer 1.5s ease-in-out infinite',
+                      }}
+                    />
                   </div>
+                  <p className="text-xs text-slate-500">
+                    {videoFile && `${(videoFile.size / (1024 * 1024)).toFixed(1)} MB`}
+                    {uploadProgress > 0 && uploadProgress < 100 && ' — please keep this tab open'}
+                  </p>
                 </div>
               )}
+
+              <style>{`
+                @keyframes shimmer {
+                  0% { background-position: 200% 0; }
+                  100% { background-position: -200% 0; }
+                }
+              `}</style>
 
               <div className="flex justify-end">
                 <button
