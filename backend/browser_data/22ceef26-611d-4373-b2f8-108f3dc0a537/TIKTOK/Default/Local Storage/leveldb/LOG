@@ -1,2 +1,5 @@
-2026/06/23-16:29:31.300 5f94 Creating DB E:\Social Media Manager\backend\browser_data\22ceef26-611d-4373-b2f8-108f3dc0a537\TIKTOK\Default\Local Storage\leveldb since it was missing.
-2026/06/23-16:29:31.315 5f94 Reusing MANIFEST E:\Social Media Manager\backend\browser_data\22ceef26-611d-4373-b2f8-108f3dc0a537\TIKTOK\Default\Local Storage\leveldb/MANIFEST-000001
+2026/06/23-21:29:17.153 52fc Creating DB E:\Social Media Manager\backend\browser_data\22ceef26-611d-4373-b2f8-108f3dc0a537\TIKTOK\Default\Local Storage\leveldb since it was missing.
+2026/06/23-21:29:17.166 52fc Reusing MANIFEST E:\Social Media Manager\backend\browser_data\22ceef26-611d-4373-b2f8-108f3dc0a537\TIKTOK\Default\Local Storage\leveldb/MANIFEST-000001
+2026/06/23-21:32:00.357 3cb4 Level-0 table #5: started
+2026/06/23-21:32:00.361 3cb4 Level-0 table #5: 120376 bytes OK
+2026/06/23-21:32:00.363 3cb4 Delete type=0 #3
