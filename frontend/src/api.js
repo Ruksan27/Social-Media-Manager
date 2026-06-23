@@ -11,12 +11,16 @@ const api = axios.create({
 
 // ── Response interceptor ────────────────────────────────────────────────────
 // If the server returns 401 (session expired / not logged in),
-// redirect to /login automatically instead of showing raw errors.
+// redirect to /login — but ONLY if we are not already there.
+// Without this guard, /profiles/me returning 401 while on /login would
+// trigger window.location.href='/login' → full reload → infinite loop.
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      // Clear any stale client state and redirect
+    if (
+      error.response?.status === 401 &&
+      !window.location.pathname.startsWith('/login')
+    ) {
       window.location.href = '/login';
     }
     return Promise.reject(error);

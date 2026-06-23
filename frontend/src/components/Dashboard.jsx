@@ -51,7 +51,11 @@ export default function Dashboard() {
   const navigate = useNavigate();
 
   const [tab, setTab] = useState('create');
+  // linkedSessions stores full objects: { platform, updatedAt }
   const [linkedSessions, setLinkedSessions] = useState([]);
+  const [linkingPid, setLinkingPid]   = useState(null);  // platform currently being linked
+  const [linkNotice, setLinkNotice]   = useState('');    // in-UI status message
+  const [showProfile, setShowProfile] = useState(false); // profile dropdown
   const [posts, setPosts] = useState([]);
   const [loadingPosts, setLoadingPosts] = useState(false);
 
@@ -95,9 +99,14 @@ export default function Dashboard() {
   const fetchSessions = async () => {
     try {
       const r = await api.get(`/sessions/${activeProfile.id}`);
-      setLinkedSessions(r.data.map(s => s.platform));
+      // Keep full objects so we can show updatedAt per platform
+      setLinkedSessions(r.data); // [{ platform, updatedAt }, ...]
     } catch { /* ignore */ }
   };
+
+  // Helper: is a platform connected?
+  const isLinked = (pid) => linkedSessions.some(s => s.platform === pid);
+  const sessionFor = (pid) => linkedSessions.find(s => s.platform === pid);
 
   const fetchPosts = async () => {
     setLoadingPosts(true);
@@ -128,7 +137,7 @@ export default function Dashboard() {
   };
 
   const togglePlatform = (id) => {
-    if (!linkedSessions.includes(id)) return;
+    if (!isLinked(id)) return;
     setSelectedPlats(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]);
   };
 
@@ -205,10 +214,37 @@ export default function Dashboard() {
 
   const handleLink = async (pid) => {
     try {
+      setLinkingPid(pid);
+      setLinkNotice(`🌐 Browser opened for ${platformLabel(pid)}. Log in there — session saves automatically in 3 minutes.`);
       await api.get(`/sessions/link/${activeProfile.id}/${pid}`);
-      alert(`Browser opened! Log in to ${platformLabel(pid)}, then return here. Session saves in 3 minutes.`);
-      setTimeout(fetchSessions, 60000);
-    } catch { alert('Could not open browser. Make sure backend is running.'); }
+
+      // Poll every 30 s so the card flips to green as soon as the session is saved
+      const poll = setInterval(async () => {
+        await fetchSessions();
+        // Stop polling once we detect the session is saved
+        setLinkedSessions(prev => {
+          if (prev.some(s => s.platform === pid)) {
+            clearInterval(poll);
+            setLinkingPid(null);
+            setLinkNotice('');
+          }
+          return prev;
+        });
+      }, 30000);
+
+      // Hard stop after 4 minutes regardless
+      setTimeout(() => {
+        clearInterval(poll);
+        setLinkingPid(null);
+        setLinkNotice('');
+        fetchSessions();
+      }, 4 * 60 * 1000);
+
+    } catch {
+      setLinkingPid(null);
+      setLinkNotice('❌ Could not open browser. Make sure the backend is running.');
+      setTimeout(() => setLinkNotice(''), 4000);
+    }
   };
 
   const startEdit = (post) => {
@@ -270,7 +306,7 @@ export default function Dashboard() {
 
   // ─────────────────────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-[#080c18] text-slate-200 font-['Outfit'] relative overflow-hidden">
+    <div className="min-h-screen bg-[#080c18] text-slate-200 relative overflow-hidden">
       {/* Background glows */}
       <div className="fixed top-[-15%] left-[-5%] w-[55vw] h-[55vw] rounded-full bg-indigo-900/8 blur-[140px] pointer-events-none" />
       <div className="fixed bottom-[-15%] right-[-5%] w-[50vw] h-[50vw] rounded-full bg-violet-900/8 blur-[140px] pointer-events-none" />
@@ -306,12 +342,100 @@ export default function Dashboard() {
               ))}
             </nav>
           </div>
-          <div className="flex items-center gap-3">
-            <div className="px-3 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/50 flex items-center gap-2">
-              <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-              <span className="text-xs text-slate-400">Profile:</span>
-              <span className="text-xs font-semibold text-indigo-300">{activeProfile?.name}</span>
+          <div className="flex items-center gap-3 relative">
+            {/* ── Profile info card ─────────────────────────────── */}
+            <div className="relative">
+              <button
+                onClick={() => setShowProfile(v => !v)}
+                className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-slate-800/70 border border-slate-700/50 hover:border-indigo-500/40 hover:bg-slate-800 transition-all duration-200 group"
+              >
+                <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse shrink-0" />
+                <div className="text-left">
+                  <p className="text-xs font-semibold text-indigo-300 leading-tight">{activeProfile?.name}</p>
+                  <p className="text-[10px] text-slate-500 leading-tight font-mono">{activeProfile?.id?.slice(0,12)}…</p>
+                </div>
+                <ChevronDown className={`w-3.5 h-3.5 text-slate-500 transition-transform duration-200 ${showProfile ? 'rotate-180' : ''}`} />
+              </button>
+
+              {/* Dropdown panel */}
+              {showProfile && (
+                <div className="absolute right-0 top-full mt-2 w-80 bg-slate-900/95 backdrop-blur-xl border border-slate-700/60 rounded-2xl shadow-2xl shadow-black/50 z-50 overflow-hidden">
+                  {/* Header */}
+                  <div className="px-5 py-4 border-b border-slate-800/60 bg-gradient-to-r from-indigo-500/10 to-violet-500/10">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shrink-0 shadow-lg">
+                        <span className="text-white font-bold text-base">{activeProfile?.name?.[0]?.toUpperCase()}</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-white text-sm">{activeProfile?.name}</p>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                          <span className="text-[11px] text-green-400">Active session</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Profile ID */}
+                  <div className="px-5 py-3 border-b border-slate-800/40">
+                    <p className="text-[10px] text-slate-500 uppercase tracking-wider mb-1">Profile ID</p>
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(activeProfile?.id || ''); }}
+                      className="flex items-center gap-2 w-full group/id hover:bg-slate-800/60 rounded-lg px-2 py-1.5 -mx-2 transition-all"
+                      title="Click to copy"
+                    >
+                      <code className="text-xs text-indigo-300 font-mono flex-1 text-left break-all">{activeProfile?.id}</code>
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5 text-slate-600 group-hover/id:text-indigo-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                  </div>
+
+                  {/* Linked platforms summary */}
+                  <div className="px-5 py-3 border-b border-slate-800/40">
+                    <div className="flex items-center justify-between mb-2.5">
+                      <p className="text-[10px] text-slate-500 uppercase tracking-wider">Linked Platforms</p>
+                      <span className="text-[11px] font-semibold text-indigo-300">{linkedSessions.length} / {PLATFORMS.length}</span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {PLATFORMS.map(p => {
+                        const sess = sessionFor(p.id);
+                        const linked = !!sess;
+                        return (
+                          <div key={p.id} className="flex items-center gap-2.5">
+                            <div className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] ${linked ? p.bg + ' ' + p.color : 'bg-slate-800 text-slate-600'}`}>
+                              {PLATFORM_ICON[p.id]}
+                            </div>
+                            <span className={`text-xs flex-1 ${linked ? 'text-slate-300' : 'text-slate-600'}`}>{p.name}</span>
+                            {linked ? (
+                              <span className="text-[10px] text-green-400">✓ Connected</span>
+                            ) : (
+                              <span className="text-[10px] text-slate-600">— Not linked</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="px-5 py-3 flex gap-2">
+                    <button
+                      onClick={() => { setTab('accounts'); setShowProfile(false); }}
+                      className="flex-1 text-xs text-center py-2 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/30 transition-all"
+                    >
+                      Manage Accounts
+                    </button>
+                    <button
+                      onClick={() => { handleLogout(); setShowProfile(false); }}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-all"
+                    >
+                      <LogOut className="w-3.5 h-3.5" /> Logout
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
+
+            {/* Keep standalone logout button too */}
             <button onClick={handleLogout} className="p-2 rounded-lg hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-all" title="Logout">
               <LogOut className="w-4 h-4" />
             </button>
@@ -332,15 +456,15 @@ export default function Dashboard() {
                 </h2>
                 <div className="space-y-2">
                   {PLATFORMS.map(p => {
-                    const isLinked   = linkedSessions.includes(p.id);
+                    const linked     = isLinked(p.id);
                     const isSelected = selectedPlats.includes(p.id);
                     return (
                       <button
                         key={p.id}
                         onClick={() => togglePlatform(p.id)}
-                        disabled={!isLinked}
+                        disabled={!linked}
                         className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all duration-200 ${
-                          !isLinked
+                          !linked
                             ? 'opacity-35 cursor-not-allowed bg-slate-950/30 border-slate-800/50'
                             : isSelected
                               ? `${p.bg} ${p.border} border shadow-md`
@@ -351,8 +475,8 @@ export default function Dashboard() {
                           {PLATFORM_ICON[p.id]}
                         </div>
                         <span className={`text-sm font-medium flex-1 text-left ${isSelected ? 'text-white' : 'text-slate-300'}`}>{p.name}</span>
-                        {!isLinked && <span className="text-[10px] font-medium px-1.5 py-0.5 bg-slate-800 rounded text-slate-500">Unlinked</span>}
-                        {isLinked && isSelected && <CheckCircle2 className={`w-4 h-4 ${p.color}`} />}
+                        {!linked && <span className="text-[10px] font-medium px-1.5 py-0.5 bg-slate-800 rounded text-slate-500">Unlinked</span>}
+                        {linked && isSelected && <CheckCircle2 className={`w-4 h-4 ${p.color}`} />}
                       </button>
                     );
                   })}
@@ -597,27 +721,75 @@ export default function Dashboard() {
         {tab === 'accounts' && (
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
             <div className="bg-slate-900/40 backdrop-blur-xl border border-slate-800/60 rounded-2xl p-8 max-w-3xl mx-auto">
-              <div className="text-center mb-8">
+              <div className="text-center mb-6">
                 <h2 className="text-2xl font-bold text-white mb-2">Linked Social Accounts</h2>
                 <p className="text-slate-400 text-sm">Connect your accounts to enable automated posting.</p>
               </div>
+
+              {/* ── Profile badge ────────────────────────────────────────── */}
+              <div className="flex items-center justify-center gap-2 mb-6 px-4 py-2.5 bg-indigo-500/10 border border-indigo-500/20 rounded-xl max-w-sm mx-auto">
+                <div className="w-2 h-2 rounded-full bg-indigo-400 animate-pulse" />
+                <span className="text-xs text-slate-400">Active profile:</span>
+                <span className="text-sm font-semibold text-indigo-300">{activeProfile?.name}</span>
+                <span className="text-[10px] text-slate-600 ml-1">({activeProfile?.id?.slice(0,8)}…)</span>
+              </div>
+
+              {/* ── In-UI link notice (replaces alert) ───────────────────── */}
+              {linkNotice && (
+                <div className="mb-5 flex items-start gap-2.5 p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-300 text-sm">
+                  <Loader2 className={`w-4 h-4 shrink-0 mt-0.5 ${linkingPid ? 'animate-spin' : ''}`} />
+                  <span>{linkNotice}</span>
+                </div>
+              )}
+
               <div className="grid sm:grid-cols-2 gap-4">
                 {PLATFORMS.map(p => {
-                  const isLinked = linkedSessions.includes(p.id);
+                  const linked   = isLinked(p.id);
+                  const session  = sessionFor(p.id);
+                  const linking  = linkingPid === p.id;
                   return (
-                    <div key={p.id} className={`flex items-center gap-4 p-4 rounded-xl border transition-all duration-300 ${isLinked ? `${p.bg} ${p.border}` : 'bg-slate-950/30 border-slate-800/60'}`}>
-                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${isLinked ? 'bg-white/10' : 'bg-slate-800/80'} ${p.color} shrink-0`}>
-                        {PLATFORM_ICON[p.id]}
+                    <div key={p.id} className={`flex items-center gap-4 p-4 rounded-xl border transition-all duration-300 ${
+                      linking ? 'border-amber-500/40 bg-amber-500/5'
+                      : linked ? `${p.bg} ${p.border}`
+                      : 'bg-slate-950/30 border-slate-800/60'
+                    }`}>
+                      <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
+                        linking ? 'bg-amber-500/10' : linked ? 'bg-white/10' : 'bg-slate-800/80'
+                      } ${p.color} shrink-0`}>
+                        {linking ? <Loader2 className="w-5 h-5 animate-spin text-amber-400" /> : PLATFORM_ICON[p.id]}
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-slate-100 text-sm">{p.name}</p>
                         <div className="flex items-center gap-1.5 mt-0.5">
-                          <div className={`w-1.5 h-1.5 rounded-full ${isLinked ? 'bg-green-400 animate-pulse' : 'bg-slate-600'}`} />
-                          <p className={`text-xs ${isLinked ? 'text-green-400' : 'text-slate-500'}`}>{isLinked ? 'Connected' : 'Not Connected'}</p>
+                          <div className={`w-1.5 h-1.5 rounded-full ${
+                            linking ? 'bg-amber-400 animate-pulse'
+                            : linked ? 'bg-green-400 animate-pulse'
+                            : 'bg-slate-600'
+                          }`} />
+                          <p className={`text-xs ${
+                            linking ? 'text-amber-400'
+                            : linked ? 'text-green-400'
+                            : 'text-slate-500'
+                          }`}>
+                            {linking ? 'Linking… (log in to the browser window)'
+                            : linked ? 'Connected'
+                            : 'Not Connected'}
+                          </p>
                         </div>
+                        {/* Show when session was last linked */}
+                        {linked && session?.updatedAt && (
+                          <p className="text-[11px] text-slate-500 mt-1">
+                            Last linked: {new Date(session.updatedAt).toLocaleString('en-US', {
+                              month: 'short', day: 'numeric', year: 'numeric',
+                              hour: '2-digit', minute: '2-digit'
+                            })}
+                          </p>
+                        )}
                       </div>
-                      {isLinked ? (
+                      {linked ? (
                         <CheckCircle2 className="w-5 h-5 text-green-400 shrink-0" />
+                      ) : linking ? (
+                        <span className="text-[10px] text-amber-400 font-medium px-2 py-1 bg-amber-500/10 rounded-lg border border-amber-500/20 shrink-0">Waiting…</span>
                       ) : (
                         <button
                           onClick={() => handleLink(p.id)}

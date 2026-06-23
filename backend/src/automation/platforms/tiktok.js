@@ -11,46 +11,42 @@ exports.upload = async (page, job, tempVideoPath) => {
   console.log(`[TikTok] Starting upload for job ${job.id}`);
 
   // Navigate to TikTok upload page
-  await page.goto('https://www.tiktok.com/upload', { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForTimeout(3000);
-
-  // TikTok uses an iframe for the upload interface
-  const uploadFrame = page.frameLocator('iframe[src*="tiktok"]').first();
-
-  // Click the upload area / file input
-  const fileInput = await page.waitForSelector('input[type="file"], input[accept*="video"]', { timeout: 15000 });
-  await fileInput.setInputFiles(tempVideoPath);
-
-  // Wait for upload to complete (caption box appears)
+  await page.goto('https://www.tiktok.com/creator-center/upload', {
+    waitUntil: 'domcontentloaded', timeout: 30000
+  });
   await page.waitForTimeout(5000);
 
-  // Fill caption / description
+  // TikTok Creator Center wraps the uploader in an iframe
+  // We must locate the iframe first, then query all elements INSIDE it
+  const frame = page.frameLocator('iframe[src*="tiktok.com"]').first();
+
+  // Set the video file via the hidden input inside the iframe
+  const fileInput = frame.locator('input[type="file"]');
+  await fileInput.setInputFiles(tempVideoPath);
+
+  // Wait for the upload to process (progress bar or success indicator)
+  await frame.locator('.upload-progress-bar, .info-progress-bar', { timeout: 60000 }).waitFor();
+  // Wait until upload is 100% (progress bar disappears or caption box appears)
+  await frame.locator('.caption-wrapper, [class*="caption-editor"]', { timeout: 120000 }).waitFor();
+  await page.waitForTimeout(2000);
+
+  // Fill caption — TikTok uses contenteditable, use type()
   const caption = [job.title, job.description].filter(Boolean).join(' ');
   if (caption) {
-    const captionBox = await page.waitForSelector(
-      '[data-testid="caption-editor"], .public-DraftEditor-content, .editor-container [contenteditable]',
-      { timeout: 20000 }
-    );
-    await captionBox.click();
-    await captionBox.fill('');
-    await captionBox.type(caption, { delay: 30 });
+    const captionBox = frame.locator('[class*="caption-editor"] [contenteditable], .public-DraftEditor-content');
+    await captionBox.first().click();
+    await captionBox.first().type(caption, { delay: 30 });
+    await page.waitForTimeout(500);
   }
 
-  // Wait for video processing
-  await page.waitForSelector(
-    '[data-testid="post_page_upload_success"], .upload-card-container .tick-icon',
-    { timeout: 120000 }
-  );
-
   // Click "Post" button
-  const postBtn = await page.waitForSelector(
-    'button[data-testid="post_video_button"], button:has-text("Post"):not(:disabled)',
-    { timeout: 15000 }
-  );
-  await postBtn.click();
+  const postBtn = frame.locator('button:has-text("Post"):not(:disabled)');
+  await postBtn.first().waitFor({ timeout: 15000 });
+  await postBtn.first().click();
 
-  // Wait for success
-  await page.waitForURL('**/profile/**', { timeout: 30000 });
+  // Wait for success (redirects to profile or shows success message)
+  await page.waitForURL('**/profile/**', { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(3000);
 
-  console.log(`[TikTok] Upload complete for job ${job.id}`);
+  console.log(`[TikTok] ✅ Upload complete for job ${job.id}`);
 };

@@ -2,37 +2,44 @@
 // TikTok engagement automation: comment, check follower, auto-follow
 
 /**
- * Posts a comment on a TikTok video
+ * Posts a comment on a TikTok video.
+ * TikTok uses a contenteditable div — .fill() does NOT work, must use .type()
  * @param {import('playwright').Page} page
- * @param {string} postUrl - Full URL of the TikTok video
- * @param {string} commentText - Text to post as a comment
+ * @param {string} postUrl
+ * @param {string} commentText
  */
 exports.commentOnPost = async (page, postUrl, commentText) => {
-  console.log(`[TikTok Engagement] Commenting on post: ${postUrl}`);
+  console.log(`[TikTok Engagement] Navigating to: ${postUrl}`);
 
   await page.goto(postUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForTimeout(4000);
 
-  // Click "Add comment" input
-  const commentInput = await page.waitForSelector(
-    '[data-testid="comment-input"], [placeholder*="Add comment"], .comment-input textarea',
-    { timeout: 15000 }
+  // Dismiss any login/cookie modal
+  const closeBtn = await page.$('[data-e2e="close-login-or-signup-container"], button:has-text("Close")');
+  if (closeBtn) { await closeBtn.click(); await page.waitForTimeout(1000); }
+
+  // Click comment input — TikTok uses a contenteditable div
+  const commentBox = await page.waitForSelector(
+    '[data-testid="comment-input"] [contenteditable], .comment-input-content [contenteditable], [placeholder*="Add comment"]',
+    { timeout: 20000 }
   );
-  await commentInput.click();
-  await page.waitForTimeout(500);
-  await commentInput.fill(commentText);
+  await commentBox.click();
+  await page.waitForTimeout(600);
+
+  // type() is required for contenteditable — fill() clears without triggering React state
+  await commentBox.type(commentText, { delay: 35 });
   await page.waitForTimeout(500);
 
-  // Press Enter to submit
+  // Submit with Enter key
   await page.keyboard.press('Enter');
   await page.waitForTimeout(3000);
 
-  console.log(`[TikTok Engagement] Comment posted successfully`);
+  console.log(`[TikTok Engagement] ✅ Comment posted successfully`);
   return { success: true };
 };
 
 /**
- * Checks if a target user follows you back on TikTok
+ * Checks if a target user follows you on TikTok.
  * @param {import('playwright').Page} page
  * @param {string} targetUsername
  * @returns {{ isFollowing: boolean }}
@@ -40,13 +47,13 @@ exports.commentOnPost = async (page, postUrl, commentText) => {
 exports.checkFollower = async (page, targetUsername) => {
   console.log(`[TikTok Engagement] Checking if @${targetUsername} follows you`);
 
-  await page.goto(`https://www.tiktok.com/@${targetUsername}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.goto(`https://www.tiktok.com/@${targetUsername}`, {
+    waitUntil: 'domcontentloaded', timeout: 30000
+  });
   await page.waitForTimeout(4000);
 
-  // Look for "Follows you" indicator
-  const followsYouEl = await page.$(
-    '[data-testid="user-bio-follows-you"], span:has-text("Follows you"), .follow-status:has-text("Follows you")'
-  );
+  // TikTok shows "Follows you" as a small tag under the username
+  const followsYouEl = await page.$('[data-e2e="follow-status"]:has-text("Follows you"), span:has-text("Follows you")');
   const isFollowing = followsYouEl !== null;
 
   console.log(`[TikTok Engagement] @${targetUsername} follows you: ${isFollowing}`);
@@ -54,7 +61,7 @@ exports.checkFollower = async (page, targetUsername) => {
 };
 
 /**
- * Follows a user on TikTok if not already following
+ * Follows a user on TikTok if not already following.
  * @param {import('playwright').Page} page
  * @param {string} targetUsername
  * @returns {{ alreadyFollowing: boolean, followed: boolean }}
@@ -62,28 +69,32 @@ exports.checkFollower = async (page, targetUsername) => {
 exports.followUser = async (page, targetUsername) => {
   console.log(`[TikTok Engagement] Following @${targetUsername}`);
 
-  await page.goto(`https://www.tiktok.com/@${targetUsername}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.goto(`https://www.tiktok.com/@${targetUsername}`, {
+    waitUntil: 'domcontentloaded', timeout: 30000
+  });
   await page.waitForTimeout(4000);
 
   // Check if already following
-  const followingBtn = await page.$('[data-testid="follow-button"]:has-text("Following")');
+  const followingBtn = await page.$(
+    '[data-e2e="follow-button"]:has-text("Following"), [data-e2e="follow-button"]:has-text("Friends")'
+  );
   if (followingBtn) {
     console.log(`[TikTok Engagement] Already following @${targetUsername}`);
     return { alreadyFollowing: true, followed: false };
   }
 
-  // Click follow button
+  // Click Follow button
   const followBtn = await page.waitForSelector(
-    '[data-testid="follow-button"]:has-text("Follow"):not(:disabled), button[aria-label*="Follow"]:not([aria-label*="Following"])',
+    '[data-e2e="follow-button"]:has-text("Follow")',
     { timeout: 10000 }
   );
   await followBtn.click();
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(2500);
 
   // Verify
-  const nowFollowing = await page.$('[data-testid="follow-button"]:has-text("Following")');
+  const nowFollowing = await page.$('[data-e2e="follow-button"]:has-text("Following"), [data-e2e="follow-button"]:has-text("Friends")');
   const success = nowFollowing !== null;
 
-  console.log(`[TikTok Engagement] Follow result for @${targetUsername}: ${success ? 'Success' : 'Failed'}`);
+  console.log(`[TikTok Engagement] Follow result for @${targetUsername}: ${success ? '✅ Success' : '❌ Failed'}`);
   return { alreadyFollowing: false, followed: success };
 };

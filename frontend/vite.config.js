@@ -8,4 +8,11 @@ export default defineConfig({
     tailwindcss(),
     react(),
   ],
+  server: {
+    // Enable hot module replacement with polling for reliable file changes on Windows
+    watch: {
+      usePolling: true,
+    },
+    hmr: true,
+  },
 })
