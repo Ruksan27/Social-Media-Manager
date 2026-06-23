@@ -15,9 +15,9 @@ model Profile {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  posts    Post[]
-  sessions SocialSession[]
-  
+  posts           Post[]
+  sessions        SocialSession[]
+  engagementTasks EngagementTask[]
 }
 
 model SocialSession {
@@ -53,4 +53,20 @@ enum Status {
   PROCESSING
   SUCCESS
   FAILED
+}
+
+model EngagementTask {
+  id            String   @id @default(uuid())
+  profileId     String
+  profile       Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  platform      String   // INSTA_REELS, TIKTOK
+  taskType      String   // COMMENT, FOLLOW, CHECK_FOLLOW
+  targetUrl     String?  @db.Text // post URL for comments
+  targetUser    String?  // username for follow
+  payload       String?  @db.Text // comment text
+  status        Status   @default(PENDING)
+  result        String?  @db.Text // result JSON
+  createdAt     DateTime @default(now())
+
+  @@index([profileId])
 }

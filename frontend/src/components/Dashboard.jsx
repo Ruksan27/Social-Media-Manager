@@ -1,14 +1,14 @@
+// src/components/Dashboard.jsx
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
+import api from '../api';
 import {
   LogOut, MonitorPlay, Video, Camera, Briefcase, Send, Sparkles,
   Link2, CheckCircle2, Upload, Clock, Trash2, Pencil, X, Check,
-  CalendarDays, AlertCircle, Loader2, Film, LayoutList, Users
+  CalendarDays, AlertCircle, Loader2, Film, LayoutList, Users,
+  MessageCircle, UserCheck, UserPlus, ChevronDown, Search
 } from 'lucide-react';
-
-const API = 'http://localhost:3000/api';
 
 // ── Platform config ────────────────────────────────────────────────────────────
 const PLATFORMS = [
@@ -20,6 +20,8 @@ const PLATFORMS = [
   { id: 'THREADS',         name: 'Threads',           color: 'text-slate-200', bg: 'bg-slate-700/60', border: 'border-slate-600/30' },
   { id: 'LINKEDIN',        name: 'LinkedIn',          color: 'text-blue-400',  bg: 'bg-blue-400/10',  border: 'border-blue-400/30' },
 ];
+
+const ENGAGEMENT_PLATFORMS = PLATFORMS.filter(p => ['INSTA_REELS', 'TIKTOK'].includes(p.id));
 
 const PLATFORM_ICON = {
   YOUTUBE_SHORTS: <Video className="w-5 h-5" />,
@@ -38,7 +40,6 @@ const STATUS_BADGE = {
   FAILED:     { label: 'Failed',     cls: 'bg-red-500/15   text-red-400   border-red-500/30' },
 };
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
 const fmtDate = (d) => new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 const toDatetimeLocal = (d) => new Date(d).toISOString().slice(0, 16);
 const platformLabel = (id) => PLATFORMS.find(p => p.id === id)?.name ?? id;
@@ -49,8 +50,8 @@ export default function Dashboard() {
   const { activeProfile, logout } = useAuth();
   const navigate = useNavigate();
 
-  const [tab, setTab] = useState('create');                // create | schedule | accounts
-  const [linkedSessions, setLinkedSessions] = useState([]); // array of platform ids
+  const [tab, setTab] = useState('create');
+  const [linkedSessions, setLinkedSessions] = useState([]);
   const [posts, setPosts] = useState([]);
   const [loadingPosts, setLoadingPosts] = useState(false);
 
@@ -59,7 +60,7 @@ export default function Dashboard() {
   const [videoPreview, setVideoPreview] = useState(null);
   const [dragOver, setDragOver]         = useState(false);
   const [selectedPlats, setSelectedPlats] = useState([]);
-  const [metadata, setMetadata] = useState({}); // Stores per-platform title/desc/schedule
+  const [metadata, setMetadata] = useState({});
   const [uploading, setUploading]       = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [createError, setCreateError]   = useState('');
@@ -73,6 +74,16 @@ export default function Dashboard() {
   const [editDate, setEditDate]       = useState('');
   const [savingEdit, setSavingEdit]   = useState(false);
 
+  // ── Engagement state ───────────────────────────────────────────────────────
+  const [engPlatform, setEngPlatform]       = useState('INSTA_REELS');
+  const [engPostUrl, setEngPostUrl]         = useState('');
+  const [engComment, setEngComment]         = useState('');
+  const [engUsername, setEngUsername]       = useState('');
+  const [engLoading, setEngLoading]         = useState(false);
+  const [engResult, setEngResult]           = useState(null);
+  const [engError, setEngError]             = useState('');
+  const [engMode, setEngMode]               = useState('comment'); // comment | check | follow
+
   // ── Load on mount ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (activeProfile?.id) {
@@ -83,7 +94,7 @@ export default function Dashboard() {
 
   const fetchSessions = async () => {
     try {
-      const r = await axios.get(`${API}/sessions/${activeProfile.id}`);
+      const r = await api.get(`/sessions/${activeProfile.id}`);
       setLinkedSessions(r.data.map(s => s.platform));
     } catch { /* ignore */ }
   };
@@ -91,7 +102,7 @@ export default function Dashboard() {
   const fetchPosts = async () => {
     setLoadingPosts(true);
     try {
-      const r = await axios.get(`${API}/posts/${activeProfile.id}`);
+      const r = await api.get(`/posts/${activeProfile.id}`);
       setPosts(r.data);
     } catch { /* ignore */ }
     finally { setLoadingPosts(false); }
@@ -116,7 +127,6 @@ export default function Dashboard() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  // ── Toggle platform selection ──────────────────────────────────────────────
   const togglePlatform = (id) => {
     if (!linkedSessions.includes(id)) return;
     setSelectedPlats(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]);
@@ -125,10 +135,9 @@ export default function Dashboard() {
   // ── Submit post ────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
     setCreateError(''); setCreateSuccess('');
-    if (!videoFile)           return setCreateError('Please select a video file.');
+    if (!videoFile)            return setCreateError('Please select a video file.');
     if (!selectedPlats.length) return setCreateError('Select at least one platform.');
-    
-    // Validate that every selected platform has a schedule date
+
     for (const pid of selectedPlats) {
       const data = metadata[pid];
       if (!data?.scheduleAt) return setCreateError(`Set a schedule date & time for ${platformLabel(pid)}.`);
@@ -139,9 +148,9 @@ export default function Dashboard() {
 
     try {
       // 1. Get Cloudinary signed upload params
-      const { data: sigData } = await axios.get(`${API}/upload/signature`);
+      const { data: sigData } = await api.get('/upload/signature');
 
-      // 2. Upload to Cloudinary directly (client-side)
+      // 2. Upload directly to Cloudinary
       const formData = new FormData();
       formData.append('file', videoFile);
       formData.append('signature', sigData.signature);
@@ -150,14 +159,17 @@ export default function Dashboard() {
       formData.append('folder', 'auto_uploader_videos');
       formData.append('resource_type', 'video');
 
-      const cloudRes = await axios.post(
+      const cloudRes = await api.post(
         `https://api.cloudinary.com/v1_1/${sigData.cloudName}/video/upload`,
         formData,
-        { onUploadProgress: (e) => setUploadProgress(Math.round((e.loaded * 100) / e.total)) }
+        {
+          withCredentials: false, // Cloudinary doesn't need our cookie
+          onUploadProgress: (e) => setUploadProgress(Math.round((e.loaded * 100) / e.total))
+        }
       );
       const cloudinaryUrl = cloudRes.data.secure_url;
 
-      // 3. Prepare platforms array for the new API format
+      // 3. Save post to backend
       const platformsData = selectedPlats.map(pid => ({
         platform: pid,
         title: metadata[pid]?.title || '',
@@ -165,14 +177,8 @@ export default function Dashboard() {
         scheduledAt: metadata[pid]?.scheduleAt,
       }));
 
-      // 4. Save post to backend DB
-      await axios.post(`${API}/posts`, {
-        profileId: activeProfile.id,
-        cloudinaryUrl,
-        platformsData,
-      });
+      await api.post('/posts', { profileId: activeProfile.id, cloudinaryUrl, platformsData });
 
-      // 5. Reset form
       setCreateSuccess('🎉 Posts scheduled successfully!');
       removeVideo();
       setSelectedPlats([]); setMetadata({});
@@ -186,33 +192,25 @@ export default function Dashboard() {
     }
   };
 
-  // ── Copy to all platforms ──────────────────────────────────────────────────
   const copyToAll = (sourcePid) => {
     const sourceData = metadata[sourcePid] || {};
     const newMeta = { ...metadata };
     selectedPlats.forEach(pid => {
       if (pid !== sourcePid) {
-        newMeta[pid] = {
-          ...newMeta[pid],
-          title: sourceData.title || '',
-          desc: sourceData.desc || '',
-          scheduleAt: sourceData.scheduleAt || ''
-        };
+        newMeta[pid] = { ...newMeta[pid], title: sourceData.title || '', desc: sourceData.desc || '', scheduleAt: sourceData.scheduleAt || '' };
       }
     });
     setMetadata(newMeta);
   };
 
-  // ── Link platform ──────────────────────────────────────────────────────────
   const handleLink = async (pid) => {
     try {
-      await axios.get(`${API}/sessions/link/${activeProfile.id}/${pid}`);
+      await api.get(`/sessions/link/${activeProfile.id}/${pid}`);
       alert(`Browser opened! Log in to ${platformLabel(pid)}, then return here. Session saves in 3 minutes.`);
       setTimeout(fetchSessions, 60000);
     } catch { alert('Could not open browser. Make sure backend is running.'); }
   };
 
-  // ── Edit post ──────────────────────────────────────────────────────────────
   const startEdit = (post) => {
     setEditId(post.id);
     setEditTitle(post.title || '');
@@ -223,7 +221,7 @@ export default function Dashboard() {
   const saveEdit = async () => {
     setSavingEdit(true);
     try {
-      await axios.patch(`${API}/posts/${editId}`, { title: editTitle, description: editDesc, scheduledAt: editDate });
+      await api.patch(`/posts/${editId}`, { title: editTitle, description: editDesc, scheduledAt: editDate });
       setEditId(null);
       fetchPosts();
     } catch (err) {
@@ -231,18 +229,44 @@ export default function Dashboard() {
     } finally { setSavingEdit(false); }
   };
 
-  const cancelEdit = () => setEditId(null);
-
-  // ── Delete post ────────────────────────────────────────────────────────────
   const handleDelete = async (id) => {
     if (!confirm('Delete this post?')) return;
     try {
-      await axios.delete(`${API}/posts/${id}`);
+      await api.delete(`/posts/${id}`);
       fetchPosts();
     } catch { alert('Failed to delete post.'); }
   };
 
   const handleLogout = () => { logout(); navigate('/login'); };
+
+  // ── Engagement handlers ────────────────────────────────────────────────────
+  const handleEngagementSubmit = async () => {
+    setEngError(''); setEngResult(null); setEngLoading(true);
+    try {
+      if (engMode === 'comment') {
+        if (!engPostUrl.trim() || !engComment.trim()) {
+          setEngError('Post URL and comment text are required.'); setEngLoading(false); return;
+        }
+        await api.post('/engagement/comment', { platform: engPlatform, postUrl: engPostUrl.trim(), commentText: engComment.trim() });
+        setEngResult({ type: 'comment', message: '✅ Comment automation started! Check your backend logs.' });
+        setEngPostUrl(''); setEngComment('');
+
+      } else if (engMode === 'check') {
+        if (!engUsername.trim()) { setEngError('Username is required.'); setEngLoading(false); return; }
+        const res = await api.post('/engagement/check-follow', { platform: engPlatform, targetUsername: engUsername.trim() });
+        setEngResult({ type: 'check', ...res.data });
+
+      } else if (engMode === 'follow') {
+        if (!engUsername.trim()) { setEngError('Username is required.'); setEngLoading(false); return; }
+        const res = await api.post('/engagement/follow', { platform: engPlatform, targetUsername: engUsername.trim() });
+        setEngResult({ type: 'follow', ...res.data });
+      }
+    } catch (err) {
+      setEngError(err.response?.data?.error || err.message || 'Action failed.');
+    } finally {
+      setEngLoading(false);
+    }
+  };
 
   // ─────────────────────────────────────────────────────────────────────────────
   return (
@@ -254,7 +278,6 @@ export default function Dashboard() {
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-50 backdrop-blur-2xl bg-[#080c18]/80 border-b border-slate-800/60 px-6 py-3.5">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
-          {/* Logo + Nav */}
           <div className="flex items-center gap-8">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-[0_0_20px_rgba(99,102,241,0.4)]">
@@ -264,9 +287,10 @@ export default function Dashboard() {
             </div>
             <nav className="flex gap-1">
               {[
-                { id: 'create',   label: 'Create Post',      Icon: Film },
-                { id: 'schedule', label: 'Schedule',         Icon: LayoutList },
-                { id: 'accounts', label: 'Linked Accounts',  Icon: Users },
+                { id: 'create',     label: 'Create Post',     Icon: Film },
+                { id: 'schedule',   label: 'Schedule',        Icon: LayoutList },
+                { id: 'accounts',   label: 'Linked Accounts', Icon: Users },
+                { id: 'engagement', label: 'Engagement',      Icon: MessageCircle },
               ].map(({ id, label, Icon }) => (
                 <button
                   key={id}
@@ -282,7 +306,6 @@ export default function Dashboard() {
               ))}
             </nav>
           </div>
-          {/* Profile + Logout */}
           <div className="flex items-center gap-3">
             <div className="px-3 py-1.5 rounded-lg bg-slate-800/60 border border-slate-700/50 flex items-center gap-2">
               <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
@@ -301,7 +324,6 @@ export default function Dashboard() {
         {/* ══════════════════ TAB: CREATE POST ══════════════════ */}
         {tab === 'create' && (
           <div className="grid lg:grid-cols-12 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-
             {/* Left: Platform selector */}
             <div className="lg:col-span-4 space-y-4">
               <div className="bg-slate-900/40 backdrop-blur-xl border border-slate-800/60 rounded-2xl p-5">
@@ -340,7 +362,6 @@ export default function Dashboard() {
 
             {/* Right: Upload + form */}
             <div className="lg:col-span-8 space-y-5">
-
               {/* Video drop zone */}
               <div className="bg-slate-900/40 backdrop-blur-xl border border-slate-800/60 rounded-2xl p-5">
                 <h2 className="text-base font-semibold text-white mb-4 flex items-center gap-2">
@@ -396,10 +417,9 @@ export default function Dashboard() {
                           {PLATFORM_ICON[pid]} {p.name} Details
                         </h2>
                         {selectedPlats.length > 1 && (
-                          <button 
+                          <button
                             onClick={() => copyToAll(pid)}
                             className="text-xs flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white rounded-lg transition-all"
-                            title="Copy this title, description and time to all other selected platforms"
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                             Apply to All
@@ -440,7 +460,6 @@ export default function Dashboard() {
                 })
               )}
 
-              {/* Error / Success */}
               {createError && (
                 <div className="flex items-center gap-2 p-3.5 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm">
                   <AlertCircle className="w-4 h-4 shrink-0" />{createError}
@@ -452,7 +471,6 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {/* Upload Progress */}
               {uploading && (
                 <div className="space-y-2">
                   <div className="flex justify-between text-xs text-slate-400">
@@ -465,7 +483,6 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {/* Submit */}
               <div className="flex justify-end">
                 <button
                   onClick={handleSubmit}
@@ -514,49 +531,29 @@ export default function Dashboard() {
                   return (
                     <div key={post.id} className={`bg-slate-900/50 backdrop-blur-md border rounded-2xl p-5 transition-all duration-300 ${editing ? 'border-indigo-500/40' : 'border-slate-800/60 hover:border-slate-700/60'}`}>
                       {editing ? (
-                        /* ── Edit mode ── */
                         <div className="space-y-3">
                           <div className="flex items-center gap-2 mb-3">
                             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${cfg.bg} ${cfg.color}`}>{PLATFORM_ICON[post.platform]}</div>
                             <span className="text-sm font-medium text-slate-300">{platformLabel(post.platform)}</span>
                             <span className="ml-auto text-xs text-indigo-400">Editing...</span>
                           </div>
-                          <input
-                            value={editTitle}
-                            onChange={e => setEditTitle(e.target.value)}
-                            placeholder="Title"
-                            className="w-full bg-slate-950/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
-                          />
-                          <textarea
-                            value={editDesc}
-                            onChange={e => setEditDesc(e.target.value)}
-                            rows="2"
-                            placeholder="Description"
-                            className="w-full bg-slate-950/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 resize-none"
-                          />
-                          <input
-                            type="datetime-local"
-                            value={editDate}
-                            onChange={e => setEditDate(e.target.value)}
-                            className="w-full bg-slate-950/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 [color-scheme:dark]"
-                          />
+                          <input value={editTitle} onChange={e => setEditTitle(e.target.value)} placeholder="Title" className="w-full bg-slate-950/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40" />
+                          <textarea value={editDesc} onChange={e => setEditDesc(e.target.value)} rows="2" placeholder="Description" className="w-full bg-slate-950/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 resize-none" />
+                          <input type="datetime-local" value={editDate} onChange={e => setEditDate(e.target.value)} className="w-full bg-slate-950/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 [color-scheme:dark]" />
                           <div className="flex gap-2 pt-1">
                             <button onClick={saveEdit} disabled={savingEdit} className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-xl transition-all disabled:opacity-50">
                               {savingEdit ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} Save
                             </button>
-                            <button onClick={cancelEdit} className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-xl transition-all">
+                            <button onClick={() => setEditId(null)} className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-xl transition-all">
                               <X className="w-3.5 h-3.5" /> Cancel
                             </button>
                           </div>
                         </div>
                       ) : (
-                        /* ── View mode ── */
                         <div className="flex items-start gap-4">
-                          {/* Platform icon */}
                           <div className={`w-10 h-10 rounded-xl shrink-0 flex items-center justify-center ${cfg.bg} ${cfg.color} border ${cfg.border}`}>
                             {PLATFORM_ICON[post.platform]}
                           </div>
-                          {/* Info */}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="font-semibold text-slate-100 truncate">{post.title || <span className="text-slate-500 italic">No title</span>}</span>
@@ -573,11 +570,9 @@ export default function Dashboard() {
                               </div>
                             )}
                           </div>
-                          {/* Video thumb */}
                           {post.cloudinaryUrl && (
                             <video src={post.cloudinaryUrl} className="w-20 h-14 rounded-xl object-cover border border-slate-700/50 shrink-0" muted />
                           )}
-                          {/* Actions */}
                           <div className="flex gap-1 shrink-0">
                             {post.status === 'PENDING' && (
                               <button onClick={() => startEdit(post)} className="p-2 rounded-lg text-slate-400 hover:text-indigo-400 hover:bg-indigo-500/10 transition-all" title="Edit">
@@ -635,6 +630,190 @@ export default function Dashboard() {
                   );
                 })}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ══════════════════ TAB: ENGAGEMENT ══════════════════ */}
+        {tab === 'engagement' && (
+          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 max-w-2xl mx-auto space-y-6">
+            <div className="text-center">
+              <h2 className="text-2xl font-bold text-white mb-2">Engagement Automation</h2>
+              <p className="text-slate-400 text-sm">Auto-comment, check follower status, and auto-follow on Instagram & TikTok.</p>
+              <div className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 rounded-lg text-amber-400 text-xs">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                Use responsibly — excessive automation may violate platform Terms of Service.
+              </div>
+            </div>
+
+            {/* Platform selector */}
+            <div className="bg-slate-900/40 border border-slate-800/60 rounded-2xl p-5 space-y-4">
+              <div>
+                <label className="block text-sm text-slate-400 mb-2">Platform</label>
+                <div className="flex gap-2">
+                  {ENGAGEMENT_PLATFORMS.map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => setEngPlatform(p.id)}
+                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border text-sm font-medium transition-all ${
+                        engPlatform === p.id
+                          ? `${p.bg} ${p.border} ${p.color} border`
+                          : 'bg-slate-800/40 border-slate-700/50 text-slate-400 hover:border-slate-600'
+                      }`}
+                    >
+                      <span className={p.color}>{PLATFORM_ICON[p.id]}</span> {p.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Action mode tabs */}
+              <div>
+                <label className="block text-sm text-slate-400 mb-2">Action</label>
+                <div className="flex gap-1 bg-slate-950/40 p-1 rounded-xl border border-slate-800/60">
+                  {[
+                    { id: 'comment', label: 'Comment',      Icon: MessageCircle },
+                    { id: 'check',   label: 'Check Follow', Icon: Search },
+                    { id: 'follow',  label: 'Auto-Follow',  Icon: UserPlus },
+                  ].map(({ id, label, Icon }) => (
+                    <button
+                      key={id}
+                      onClick={() => { setEngMode(id); setEngResult(null); setEngError(''); }}
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition-all ${
+                        engMode === id
+                          ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                          : 'text-slate-500 hover:text-slate-300'
+                      }`}
+                    >
+                      <Icon className="w-3.5 h-3.5" /> {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Comment mode */}
+              {engMode === 'comment' && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-sm text-slate-400 mb-1.5">Post URL</label>
+                    <input
+                      type="url"
+                      value={engPostUrl}
+                      onChange={e => setEngPostUrl(e.target.value)}
+                      placeholder={engPlatform === 'INSTA_REELS' ? 'https://www.instagram.com/p/...' : 'https://www.tiktok.com/@user/video/...'}
+                      className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-slate-400 mb-1.5">Comment Text</label>
+                    <textarea
+                      value={engComment}
+                      onChange={e => setEngComment(e.target.value)}
+                      rows="3"
+                      placeholder="Great content! Keep it up 🔥"
+                      className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 resize-none text-sm"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Check / Follow mode */}
+              {(engMode === 'check' || engMode === 'follow') && (
+                <div>
+                  <label className="block text-sm text-slate-400 mb-1.5">Target Username</label>
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-sm">@</span>
+                    <input
+                      type="text"
+                      value={engUsername}
+                      onChange={e => setEngUsername(e.target.value.replace('@', ''))}
+                      placeholder="username"
+                      className="w-full bg-slate-950/60 border border-slate-800 rounded-xl pl-8 pr-4 py-3 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 text-sm"
+                    />
+                  </div>
+                  {engMode === 'check' && (
+                    <p className="text-xs text-slate-500 mt-2">Checks if this user follows you back. Opens a browser session with your saved cookies.</p>
+                  )}
+                  {engMode === 'follow' && (
+                    <p className="text-xs text-amber-500/80 mt-2">⚠️ Will automatically click Follow on this user's profile if not already following.</p>
+                  )}
+                </div>
+              )}
+
+              {/* Error */}
+              {engError && (
+                <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm">
+                  <AlertCircle className="w-4 h-4 shrink-0" /> {engError}
+                </div>
+              )}
+
+              {/* Result */}
+              {engResult && (
+                <div className="p-4 bg-slate-950/60 border border-slate-700/60 rounded-xl space-y-2">
+                  {engResult.type === 'comment' && (
+                    <p className="text-green-400 text-sm font-medium">{engResult.message}</p>
+                  )}
+                  {engResult.type === 'check' && (
+                    <div className="flex items-center gap-3">
+                      {engResult.isFollowing ? (
+                        <>
+                          <CheckCircle2 className="w-5 h-5 text-green-400" />
+                          <div>
+                            <p className="text-green-400 text-sm font-medium">@{engResult.targetUsername} follows you ✅</p>
+                            <p className="text-slate-500 text-xs">They are following your account.</p>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <UserCheck className="w-5 h-5 text-amber-400" />
+                          <div>
+                            <p className="text-amber-400 text-sm font-medium">@{engResult.targetUsername} does NOT follow you</p>
+                            <button
+                              onClick={() => { setEngMode('follow'); setEngUsername(engResult.targetUsername); setEngResult(null); }}
+                              className="text-xs text-indigo-400 hover:text-indigo-300 underline mt-0.5"
+                            >
+                              → Switch to Auto-Follow
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {engResult.type === 'follow' && (
+                    <div className="flex items-center gap-3">
+                      {engResult.alreadyFollowing ? (
+                        <>
+                          <CheckCircle2 className="w-5 h-5 text-slate-400" />
+                          <p className="text-slate-400 text-sm">Already following @{engResult.targetUsername}</p>
+                        </>
+                      ) : engResult.followed ? (
+                        <>
+                          <UserPlus className="w-5 h-5 text-green-400" />
+                          <p className="text-green-400 text-sm font-medium">Successfully followed @{engResult.targetUsername} ✅</p>
+                        </>
+                      ) : (
+                        <>
+                          <AlertCircle className="w-5 h-5 text-red-400" />
+                          <p className="text-red-400 text-sm">Follow action may have failed for @{engResult.targetUsername}</p>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Submit button */}
+              <button
+                onClick={handleEngagementSubmit}
+                disabled={engLoading}
+                className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-3.5 rounded-xl shadow-[0_0_20px_rgba(99,102,241,0.25)] hover:shadow-[0_0_30px_rgba(99,102,241,0.4)] hover:-translate-y-0.5 transition-all"
+              >
+                {engLoading ? <Loader2 className="w-4 h-4 animate-spin" /> :
+                  engMode === 'comment' ? <><MessageCircle className="w-4 h-4" /> Post Comment</> :
+                  engMode === 'check'   ? <><Search className="w-4 h-4" /> Check Follower</> :
+                  <><UserPlus className="w-4 h-4" /> Auto-Follow</>
+                }
+              </button>
             </div>
           </div>
         )}

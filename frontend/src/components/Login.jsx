@@ -1,10 +1,9 @@
+// src/components/Login.jsx
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
-import { UserPlus, User, Loader2, Sparkles, Key, ArrowRight } from 'lucide-react';
-
-const API_BASE = 'http://localhost:3000/api';
+import api from '../api';
+import { UserPlus, User, Loader2, Sparkles, Key, ArrowRight, ShieldCheck } from 'lucide-react';
 
 export default function Login() {
   const [isRegistering, setIsRegistering] = useState(false);
@@ -12,7 +11,7 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  
+
   const { login } = useAuth();
   const navigate = useNavigate();
 
@@ -27,8 +26,9 @@ export default function Login() {
       setIsLoading(true);
       setError('');
       const endpoint = isRegistering ? '/profiles/register' : '/profiles/login';
-      const res = await axios.post(`${API_BASE}${endpoint}`, { name, password });
-      
+      // api instance already has withCredentials: true — the HttpOnly cookie
+      // will be set automatically by the server response
+      const res = await api.post(endpoint, { name: name.trim(), password });
       login(res.data);
       navigate('/');
     } catch (err) {
@@ -58,6 +58,12 @@ export default function Login() {
           </p>
         </div>
 
+        {/* Security badge */}
+        <div className="flex items-center justify-center gap-1.5 mb-6 text-xs text-slate-500">
+          <ShieldCheck className="w-3.5 h-3.5 text-green-500" />
+          <span>Secured with HttpOnly cookies — your session is XSS-safe</span>
+        </div>
+
         {error && (
           <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm flex items-center justify-center animate-in fade-in slide-in-from-top-2">
             {error}
@@ -77,6 +83,7 @@ export default function Login() {
                 onChange={(e) => setName(e.target.value)}
                 className="w-full bg-slate-950/50 border border-slate-800 rounded-xl pl-12 pr-4 py-4 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all duration-300 shadow-inner"
                 placeholder="e.g. Gaming Channel"
+                autoComplete="username"
               />
             </div>
           </div>
@@ -92,6 +99,7 @@ export default function Login() {
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full bg-slate-950/50 border border-slate-800 rounded-xl pl-12 pr-4 py-4 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all duration-300 shadow-inner"
                 placeholder="••••••••"
+                autoComplete={isRegistering ? 'new-password' : 'current-password'}
               />
             </div>
           </div>
@@ -113,7 +121,7 @@ export default function Login() {
         </form>
 
         <div className="mt-8 text-center">
-          <button 
+          <button
             onClick={() => { setIsRegistering(!isRegistering); setError(''); }}
             className="text-sm font-medium text-slate-400 hover:text-indigo-400 transition-colors duration-300 cursor-pointer"
           >
