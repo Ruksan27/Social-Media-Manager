@@ -165,44 +165,69 @@ export default function Dashboard() {
       // 2. Upload directly to Cloudinary using RAW axios (not api instance)
       //    The api instance has withCredentials:true which causes CORS
       //    preflight failures with Cloudinary — that's the "network error at 50%"
-      const formData = new FormData();
-      formData.append('file', videoFile);
-      formData.append('signature', sigData.signature);
-      formData.append('timestamp', sigData.timestamp);
-      formData.append('api_key', sigData.apiKey);
-      formData.append('folder', 'auto_uploader_videos');
-
       const cloudinaryUrl_endpoint = `https://api.cloudinary.com/v1_1/${sigData.cloudName}/video/upload`;
 
-      // Retry upload up to 3 times with exponential backoff
-      let cloudRes = null;
-      let lastErr = null;
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          cloudRes = await axios.post(cloudinaryUrl_endpoint, formData, {
-            timeout: 0,                // no client-side timeout for large videos
-            withCredentials: false,     // CRITICAL: Cloudinary doesn't accept credentials
-            maxContentLength: Infinity, // allow large files
-            maxBodyLength: Infinity,    // allow large files
-            onUploadProgress: (e) => {
-              if (e.total) setUploadProgress(Math.round((e.loaded * 100) / e.total));
-            },
-          });
-          break; // success — exit retry loop
-        } catch (err) {
-          lastErr = err;
-          if (err.response) throw err; // Cloudinary returned a real error (4xx/5xx), don't retry
-          if (attempt < 3) {
-            const delay = 1000 * Math.pow(2, attempt);
-            console.warn(`⏳ Upload attempt ${attempt} failed, retrying in ${delay}ms...`);
-            setUploadProgress(0);
-            await new Promise(r => setTimeout(r, delay));
+      // ── Chunked Upload Logic for Large Files (>100MB) ──
+      const chunkSize = 15 * 1024 * 1024; // 15 MB chunks
+      const totalSize = videoFile.size;
+      const uniqueUploadId = `upload_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      let cloudinaryUrl = null;
+
+      for (let start = 0; start < totalSize; start += chunkSize) {
+        const end = Math.min(start + chunkSize - 1, totalSize - 1);
+        const chunk = videoFile.slice(start, end + 1);
+
+        const formData = new FormData();
+        formData.append('file', chunk);
+        formData.append('signature', sigData.signature);
+        formData.append('timestamp', sigData.timestamp);
+        formData.append('api_key', sigData.apiKey);
+        formData.append('folder', 'auto_uploader_videos');
+
+        let chunkRes = null;
+        let lastErr = null;
+
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            chunkRes = await axios.post(cloudinaryUrl_endpoint, formData, {
+              timeout: 0,
+              withCredentials: false,
+              maxContentLength: Infinity,
+              maxBodyLength: Infinity,
+              headers: {
+                'X-Unique-Upload-Id': uniqueUploadId,
+                'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+              },
+              onUploadProgress: (e) => {
+                if (e.loaded) {
+                  const totalLoaded = start + e.loaded;
+                  setUploadProgress(Math.min(Math.round((totalLoaded * 100) / totalSize), 100));
+                }
+              },
+            });
+            break; // Success for this chunk
+          } catch (err) {
+            lastErr = err;
+            if (err.response && err.response.status >= 400 && err.response.status < 500) {
+              throw err; // Real error from Cloudinary, don't retry
+            }
+            if (attempt < 3) {
+              const delay = 1000 * Math.pow(2, attempt);
+              console.warn(`⏳ Chunk [${start}-${end}] attempt ${attempt} failed, retrying in ${delay}ms...`);
+              await new Promise(r => setTimeout(r, delay));
+            }
           }
         }
-      }
-      if (!cloudRes) throw lastErr || new Error('Upload failed after retries.');
 
-      const cloudinaryUrl = cloudRes.data.secure_url;
+        if (!chunkRes) throw lastErr || new Error('Chunk upload failed after retries.');
+
+        // Cloudinary returns the full secure_url only on the final chunk
+        if (chunkRes.data && chunkRes.data.secure_url) {
+          cloudinaryUrl = chunkRes.data.secure_url;
+        }
+      }
+
+      if (!cloudinaryUrl) throw new Error('Upload finished but no URL returned.');
 
       // 3. Save post to backend
       const platformsData = selectedPlats.map(pid => ({
