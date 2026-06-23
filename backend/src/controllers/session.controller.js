@@ -130,8 +130,76 @@ exports.linkSession = async (req, res) => {
     console.log('⏳ Waiting 3 minutes for you to log in...');
     await page.waitForTimeout(3 * 60 * 1000);
 
+    // ── Detect Logged-In Username ────────────────────────────────────────────
+    let username = 'Connected Account';
+    try {
+      console.log(`🔍 Attempting to detect username for ${platform}...`);
+      if (platform === 'TIKTOK') {
+        await page.goto('https://www.tiktok.com/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        username = await page.evaluate(() => {
+          const link = document.querySelector('a[href*="/@"]');
+          if (link) {
+            const match = link.getAttribute('href').match(/\/@([a-zA-Z0-9_\.]+)/);
+            return match ? '@' + match[1] : null;
+          }
+          return null;
+        }) || username;
+      } else if (platform === 'INSTA_REELS') {
+        await page.goto('https://www.instagram.com/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        username = await page.evaluate(() => {
+          const links = Array.from(document.querySelectorAll('a[href^="/"]'));
+          for (const link of links) {
+            const href = link.getAttribute('href');
+            if (href && href.length > 2 && !['/explore', '/reels', '/direct', '/emails', '/accounts', '/developer'].some(x => href.startsWith(x))) {
+              return '@' + href.replace(/\//g, '');
+            }
+          }
+          return null;
+        }) || username;
+      } else if (platform.startsWith('YOUTUBE')) {
+        await page.goto('https://www.youtube.com/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        username = await page.evaluate(() => {
+          const link = document.querySelector('a[href^="/@"]');
+          return link ? link.getAttribute('href').replace('/', '') : null;
+        }) || username;
+      } else if (platform === 'FB_REELS') {
+        await page.goto('https://www.facebook.com/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        username = await page.evaluate(() => {
+          const links = Array.from(document.querySelectorAll('a[href*="facebook.com/"], a[href^="/"]'));
+          for (const link of links) {
+            const href = link.getAttribute('href');
+            if (href && (href.includes('/me') || href.includes('profile.php'))) {
+              return link.innerText || null;
+            }
+          }
+          const btn = document.querySelector('[aria-label*="Your profile"], [aria-label*="Profile"]');
+          if (btn) return btn.getAttribute('aria-label').replace('Your profile, ', '');
+          return null;
+        }) || username;
+      } else if (platform === 'THREADS') {
+        await page.goto('https://www.threads.net/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        username = await page.evaluate(() => {
+          const link = document.querySelector('a[href^="/@"]');
+          return link ? link.getAttribute('href').replace('/', '') : null;
+        }) || username;
+      } else if (platform === 'LINKEDIN') {
+        await page.goto('https://www.linkedin.com/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+        username = await page.evaluate(() => {
+          const nameEl = document.querySelector('.feed-identity-module__actor-meta a, .feed-identity-module__name');
+          if (nameEl) return nameEl.innerText.trim();
+          const profileLink = document.querySelector('a[href*="/in/"]');
+          return profileLink ? 'LinkedIn User' : null;
+        }) || username;
+      }
+      console.log(`✨ Detected username: ${username}`);
+    } catch (err) {
+      console.error('Username detection skipped/failed:', err.message);
+    }
+
     // ── Capture session state ────────────────────────────────────────────────
     const storageState = await context.storageState();
+    // Inject username into storageState JSON structure
+    storageState.customUsername = username;
 
     // ── Persist to database ──────────────────────────────────────────────────
     const existing = await prisma.socialSession.findFirst({
@@ -163,11 +231,64 @@ exports.getLinkedSessions = async (req, res) => {
   try {
     const sessions = await prisma.socialSession.findMany({
       where: { profileId },
-      select: { platform: true, updatedAt: true },
+      select: { platform: true, updatedAt: true, sessionData: true },
     });
-    res.json(sessions);
+    
+    const mapped = sessions.map(s => {
+      let username = 'Connected Account';
+      try {
+        const data = typeof s.sessionData === 'string' ? JSON.parse(s.sessionData) : s.sessionData;
+        if (data && data.customUsername) {
+          username = data.customUsername;
+        }
+      } catch (e) {}
+      
+      return {
+        platform: s.platform,
+        updatedAt: s.updatedAt,
+        username
+      };
+    });
+
+    res.json(mapped);
   } catch (error) {
     console.error('getLinkedSessions error:', error);
     res.status(500).json({ error: 'Failed to fetch sessions' });
+  }
+};
+
+// ─── Disconnect/Delete session ───────────────────────────────────────────────
+exports.deleteSession = async (req, res) => {
+  const { profileId, platform } = req.params;
+  try {
+    // Remove session entry from database
+    await prisma.socialSession.deleteMany({
+      where: { profileId, platform },
+    });
+
+    // Clean up local persistent browser data directory
+    const profileDataDir = path.join(USER_DATA_DIR, profileId, platform);
+    if (fs.existsSync(profileDataDir)) {
+      try {
+        // Prefer async removal for better error handling
+        await fs.promises.rm(profileDataDir, { recursive: true, force: true });
+        console.log(`🗑️ Deleted browser data at ${profileDataDir}`);
+      } catch (rmErr) {
+        console.warn('⚠️ Direct deletion failed, attempting fallback rename:', rmErr.message);
+        const fallbackPath = `${profileDataDir}_old_${Date.now()}`;
+        try {
+          await fs.promises.rename(profileDataDir, fallbackPath);
+          console.log(`🗑️ Renamed stale data to ${fallbackPath}`);
+        } catch (renameErr) {
+          console.error('❌ Unable to clean up browser data:', renameErr.message);
+        }
+      }
+    }
+
+    console.log(`🗑️ Disconnected session for ${platform} | Profile: ${profileId}`);
+    res.json({ success: true, message: 'Session disconnected successfully' });
+  } catch (error) {
+    console.error('deleteSession error:', error);
+    res.status(500).json({ error: 'Failed to disconnect session', details: error.message });
   }
 };

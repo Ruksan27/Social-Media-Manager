@@ -86,7 +86,9 @@ export default function Dashboard() {
   const [engLoading, setEngLoading]         = useState(false);
   const [engResult, setEngResult]           = useState(null);
   const [engError, setEngError]             = useState('');
-  const [engMode, setEngMode]               = useState('comment'); // comment | check | follow
+  const [engMode, setEngMode]               = useState('comment'); // comment | check | follow | auto-dm
+  const [engKeyword, setEngKeyword]         = useState('');
+  const [engReplyText, setEngReplyText]     = useState('');
 
   // ── Load on mount ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -247,6 +249,20 @@ export default function Dashboard() {
     }
   };
 
+  const handleDisconnect = async (pid) => {
+    if (!window.confirm(`Are you sure you want to disconnect your ${platformLabel(pid)} account?`)) return;
+    try {
+      setLinkNotice(`Disconnecting ${platformLabel(pid)}...`);
+      await api.delete(`/sessions/${activeProfile.id}/${pid}`);
+      setLinkNotice(`✅ Disconnected ${platformLabel(pid)} successfully.`);
+      setTimeout(() => setLinkNotice(''), 3000);
+      fetchSessions();
+    } catch {
+      setLinkNotice('❌ Failed to disconnect account.');
+      setTimeout(() => setLinkNotice(''), 3000);
+    }
+  };
+
   const startEdit = (post) => {
     setEditId(post.id);
     setEditTitle(post.title || '');
@@ -296,6 +312,18 @@ export default function Dashboard() {
         if (!engUsername.trim()) { setEngError('Username is required.'); setEngLoading(false); return; }
         const res = await api.post('/engagement/follow', { platform: engPlatform, targetUsername: engUsername.trim() });
         setEngResult({ type: 'follow', ...res.data });
+      } else if (engMode === 'auto-dm') {
+        if (!engPostUrl.trim() || !engKeyword.trim() || !engReplyText.trim()) {
+          setEngError('Post URL, trigger keyword, and reply message are required.'); setEngLoading(false); return;
+        }
+        await api.post('/engagement/auto-dm', {
+          platform: engPlatform,
+          postUrl: engPostUrl.trim(),
+          keyword: engKeyword.trim(),
+          messageText: engReplyText.trim()
+        });
+        setEngResult({ type: 'auto-dm', message: '🚀 Auto-DM Comment Responder started in the background! Watch the backend logs.' });
+        setEngPostUrl(''); setEngKeyword(''); setEngReplyText('');
       }
     } catch (err) {
       setEngError(err.response?.data?.error || err.message || 'Action failed.');
@@ -406,7 +434,7 @@ export default function Dashboard() {
                             </div>
                             <span className={`text-xs flex-1 ${linked ? 'text-slate-300' : 'text-slate-600'}`}>{p.name}</span>
                             {linked ? (
-                              <span className="text-[10px] text-green-400">✓ Connected</span>
+                              <span className="text-[10px] text-green-400 font-medium truncate max-w-[100px]">{sess.username || '✓ Connected'}</span>
                             ) : (
                               <span className="text-[10px] text-slate-600">— Not linked</span>
                             )}
@@ -772,7 +800,7 @@ export default function Dashboard() {
                             : 'text-slate-500'
                           }`}>
                             {linking ? 'Linking… (log in to the browser window)'
-                            : linked ? 'Connected'
+                            : linked ? `Connected as: ${session?.username || 'Account'}`
                             : 'Not Connected'}
                           </p>
                         </div>
@@ -787,7 +815,16 @@ export default function Dashboard() {
                         )}
                       </div>
                       {linked ? (
-                        <CheckCircle2 className="w-5 h-5 text-green-400 shrink-0" />
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          <CheckCircle2 className="w-5 h-5 text-green-400 shrink-0" />
+                          <button
+                            onClick={() => handleDisconnect(p.id)}
+                            className="text-[10px] text-red-400 hover:text-red-300 font-medium px-2 py-1 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 hover:border-red-500/30 rounded-md transition-all shrink-0"
+                            title="Disconnect Account"
+                          >
+                            Disconnect
+                          </button>
+                        </div>
                       ) : linking ? (
                         <span className="text-[10px] text-amber-400 font-medium px-2 py-1 bg-amber-500/10 rounded-lg border border-amber-500/20 shrink-0">Waiting…</span>
                       ) : (
@@ -847,6 +884,7 @@ export default function Dashboard() {
                     { id: 'comment', label: 'Comment',      Icon: MessageCircle },
                     { id: 'check',   label: 'Check Follow', Icon: Search },
                     { id: 'follow',  label: 'Auto-Follow',  Icon: UserPlus },
+                    { id: 'auto-dm', label: 'Auto-DM Responder', Icon: Sparkles },
                   ].map(({ id, label, Icon }) => (
                     <button
                       key={id}
@@ -889,6 +927,50 @@ export default function Dashboard() {
                 </div>
               )}
 
+              {/* Auto-DM Responder Mode */}
+              {engMode === 'auto-dm' && (
+                <div className="space-y-3">
+                  {engPlatform !== 'INSTA_REELS' ? (
+                    <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-400 text-xs">
+                      Auto-DM comment responder is currently only supported on Instagram. Please select "Instagram Reels" platform above.
+                    </div>
+                  ) : (
+                    <>
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1.5">Post / Reel URL</label>
+                        <input
+                          type="url"
+                          value={engPostUrl}
+                          onChange={e => setEngPostUrl(e.target.value)}
+                          placeholder="https://www.instagram.com/reel/..."
+                          className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1.5">Trigger Keyword (Comment)</label>
+                        <input
+                          type="text"
+                          value={engKeyword}
+                          onChange={e => setEngKeyword(e.target.value)}
+                          placeholder="e.g. SEND IT TO ME"
+                          className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1.5">Reply Message (DM)</label>
+                        <textarea
+                          value={engReplyText}
+                          onChange={e => setEngReplyText(e.target.value)}
+                          rows="3"
+                          placeholder="Hey! Here is the resource link: https://yourlink.com"
+                          className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 resize-none text-sm"
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+
               {/* Check / Follow mode */}
               {(engMode === 'check' || engMode === 'follow') && (
                 <div>
@@ -922,7 +1004,7 @@ export default function Dashboard() {
               {/* Result */}
               {engResult && (
                 <div className="p-4 bg-slate-950/60 border border-slate-700/60 rounded-xl space-y-2">
-                  {engResult.type === 'comment' && (
+                  {(engResult.type === 'comment' || engResult.type === 'auto-dm') && (
                     <p className="text-green-400 text-sm font-medium">{engResult.message}</p>
                   )}
                   {engResult.type === 'check' && (
@@ -977,12 +1059,13 @@ export default function Dashboard() {
               {/* Submit button */}
               <button
                 onClick={handleEngagementSubmit}
-                disabled={engLoading}
+                disabled={engLoading || (engMode === 'auto-dm' && engPlatform !== 'INSTA_REELS')}
                 className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-3.5 rounded-xl shadow-[0_0_20px_rgba(99,102,241,0.25)] hover:shadow-[0_0_30px_rgba(99,102,241,0.4)] hover:-translate-y-0.5 transition-all"
               >
                 {engLoading ? <Loader2 className="w-4 h-4 animate-spin" /> :
                   engMode === 'comment' ? <><MessageCircle className="w-4 h-4" /> Post Comment</> :
                   engMode === 'check'   ? <><Search className="w-4 h-4" /> Check Follower</> :
+                  engMode === 'auto-dm' ? <><Sparkles className="w-4 h-4" /> Start Auto-DM Responder</> :
                   <><UserPlus className="w-4 h-4" /> Auto-Follow</>
                 }
               </button>

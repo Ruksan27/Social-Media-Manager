@@ -146,3 +146,35 @@ exports.followUser = async (req, res) => {
     if (context) await context.close().catch(() => {});
   }
 };
+
+// ── POST /api/engagement/auto-dm ─────────────────────────────────────────────
+// Body: { platform, postUrl, keyword, messageText }
+exports.autoDM = async (req, res) => {
+  const { platform, postUrl, keyword, messageText } = req.body;
+  const profileId = req.profile.id;
+
+  if (!platform || !postUrl || !keyword?.trim() || !messageText?.trim()) {
+    return res.status(400).json({ error: 'platform, postUrl, keyword, and messageText are required.' });
+  }
+
+  if (platform !== 'INSTA_REELS') {
+    return res.status(400).json({ error: 'Auto-DM responder is currently only supported for INSTA_REELS (Instagram).' });
+  }
+
+  res.status(202).json({ message: 'Auto-DM responder automation started. Running in the background.' });
+
+  // Execute in background
+  (async () => {
+    let context;
+    try {
+      const { context: ctx, page } = await launchWithSession(profileId, platform);
+      context = ctx;
+      const autoDMMod = require('../automation/engagement/instagramAutoDM');
+      await autoDMMod.runAutoDM(page, postUrl.trim(), keyword.trim(), messageText.trim());
+    } catch (err) {
+      console.error('❌ [Engagement] Auto-DM process failed:', err.message);
+    } finally {
+      if (context) await context.close().catch(() => {});
+    }
+  })();
+};

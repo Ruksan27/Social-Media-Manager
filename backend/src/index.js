@@ -82,6 +82,7 @@ app.use('/api/engagement',  apiLimiter, authMiddleware);
 // ── Session Linking Routes ─────────────────────────────────────────────────────
 app.get('/api/sessions/link/:profileId/:platform', sessionController.linkSession);
 app.get('/api/sessions/:profileId',                sessionController.getLinkedSessions);
+app.delete('/api/sessions/:profileId/:platform',    sessionController.deleteSession);
 
 // ── Post Routes ────────────────────────────────────────────────────────────────
 app.post(  '/api/posts',       postController.createPost);
@@ -96,6 +97,7 @@ app.get('/api/upload/signature', uploadController.getSignedUploadUrl);
 app.post('/api/engagement/comment',      engagementController.comment);
 app.post('/api/engagement/check-follow', engagementController.checkFollow);
 app.post('/api/engagement/follow',       engagementController.followUser);
+app.post('/api/engagement/auto-dm',      engagementController.autoDM);
 
 // ── Cron / Automation (Render cron job pings this endpoint) ───────────────────
 // NOT auth-protected — pinged externally by Render's cron service

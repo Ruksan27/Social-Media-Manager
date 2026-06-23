@@ -10,7 +10,7 @@ exports.getSignedUploadUrl = async (req, res) => {
     });
 
     const timestamp = Math.round((new Date()).getTime() / 1000);
-    const signature = cloudinary.utils.sign_upload_request(
+    const signature = cloudinary.utils.api_sign_request(
       { timestamp, folder: 'auto_uploader_videos', resource_type: 'video' },
       process.env.CLOUDINARY_API_SECRET
     );
