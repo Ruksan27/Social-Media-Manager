@@ -59,9 +59,7 @@ export default function Dashboard() {
   const [videoPreview, setVideoPreview] = useState(null);
   const [dragOver, setDragOver]         = useState(false);
   const [selectedPlats, setSelectedPlats] = useState([]);
-  const [title, setTitle]               = useState('');
-  const [desc, setDesc]                 = useState('');
-  const [scheduleAt, setScheduleAt]     = useState('');
+  const [metadata, setMetadata] = useState({}); // Stores per-platform title/desc/schedule
   const [uploading, setUploading]       = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [createError, setCreateError]   = useState('');
@@ -129,8 +127,13 @@ export default function Dashboard() {
     setCreateError(''); setCreateSuccess('');
     if (!videoFile)           return setCreateError('Please select a video file.');
     if (!selectedPlats.length) return setCreateError('Select at least one platform.');
-    if (!scheduleAt)          return setCreateError('Set a schedule date & time.');
-    if (new Date(scheduleAt) <= new Date()) return setCreateError('Schedule time must be in the future.');
+    
+    // Validate that every selected platform has a schedule date
+    for (const pid of selectedPlats) {
+      const data = metadata[pid];
+      if (!data?.scheduleAt) return setCreateError(`Set a schedule date & time for ${platformLabel(pid)}.`);
+      if (new Date(data.scheduleAt) <= new Date()) return setCreateError(`Schedule time for ${platformLabel(pid)} must be in the future.`);
+    }
 
     setUploading(true); setUploadProgress(0);
 
@@ -154,20 +157,25 @@ export default function Dashboard() {
       );
       const cloudinaryUrl = cloudRes.data.secure_url;
 
-      // 3. Save post to backend DB
+      // 3. Prepare platforms array for the new API format
+      const platformsData = selectedPlats.map(pid => ({
+        platform: pid,
+        title: metadata[pid]?.title || '',
+        description: metadata[pid]?.desc || '',
+        scheduledAt: metadata[pid]?.scheduleAt,
+      }));
+
+      // 4. Save post to backend DB
       await axios.post(`${API}/posts`, {
         profileId: activeProfile.id,
         cloudinaryUrl,
-        platforms: selectedPlats,
-        title: title || null,
-        description: desc || null,
-        scheduledAt: scheduleAt,
+        platformsData,
       });
 
-      // 4. Reset form
+      // 5. Reset form
       setCreateSuccess('🎉 Posts scheduled successfully!');
       removeVideo();
-      setSelectedPlats([]); setTitle(''); setDesc(''); setScheduleAt('');
+      setSelectedPlats([]); setMetadata({});
       fetchPosts();
       setTimeout(() => { setCreateSuccess(''); setTab('schedule'); }, 1800);
 
@@ -176,6 +184,23 @@ export default function Dashboard() {
     } finally {
       setUploading(false); setUploadProgress(0);
     }
+  };
+
+  // ── Copy to all platforms ──────────────────────────────────────────────────
+  const copyToAll = (sourcePid) => {
+    const sourceData = metadata[sourcePid] || {};
+    const newMeta = { ...metadata };
+    selectedPlats.forEach(pid => {
+      if (pid !== sourcePid) {
+        newMeta[pid] = {
+          ...newMeta[pid],
+          title: sourceData.title || '',
+          desc: sourceData.desc || '',
+          scheduleAt: sourceData.scheduleAt || ''
+        };
+      }
+    });
+    setMetadata(newMeta);
   };
 
   // ── Link platform ──────────────────────────────────────────────────────────
@@ -355,40 +380,65 @@ export default function Dashboard() {
               </div>
 
               {/* Post Details */}
-              <div className="bg-slate-900/40 backdrop-blur-xl border border-slate-800/60 rounded-2xl p-5 space-y-4">
-                <h2 className="text-base font-semibold text-white flex items-center gap-2">
-                  <Pencil className="w-4 h-4 text-indigo-400" /> Post Details
-                </h2>
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1.5">Title <span className="text-slate-600">(optional)</span></label>
-                  <input
-                    type="text"
-                    value={title}
-                    onChange={e => setTitle(e.target.value)}
-                    placeholder="Enter a catchy title..."
-                    className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 transition-all text-sm"
-                  />
+              {selectedPlats.length === 0 ? (
+                <div className="bg-slate-900/40 border border-slate-800/60 rounded-2xl p-8 text-center text-slate-500 flex flex-col items-center justify-center">
+                  <LayoutList className="w-8 h-8 mb-3 opacity-50" />
+                  Select one or more target platforms to configure post details.
                 </div>
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1.5">Description / Caption <span className="text-slate-600">(optional)</span></label>
-                  <textarea
-                    value={desc}
-                    onChange={e => setDesc(e.target.value)}
-                    rows="3"
-                    placeholder="Write your caption here... #hashtags"
-                    className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 resize-none transition-all text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-slate-400 mb-1.5 flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5" /> Schedule Date & Time</label>
-                  <input
-                    type="datetime-local"
-                    value={scheduleAt}
-                    onChange={e => setScheduleAt(e.target.value)}
-                    className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 transition-all text-sm [color-scheme:dark]"
-                  />
-                </div>
-              </div>
+              ) : (
+                selectedPlats.map(pid => {
+                  const p = platformCfg(pid);
+                  const data = metadata[pid] || {};
+                  return (
+                    <div key={pid} className="bg-slate-900/40 backdrop-blur-xl border border-slate-800/60 rounded-2xl p-5 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h2 className={`text-base font-semibold flex items-center gap-2 ${p.color}`}>
+                          {PLATFORM_ICON[pid]} {p.name} Details
+                        </h2>
+                        {selectedPlats.length > 1 && (
+                          <button 
+                            onClick={() => copyToAll(pid)}
+                            className="text-xs flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white rounded-lg transition-all"
+                            title="Copy this title, description and time to all other selected platforms"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                            Apply to All
+                          </button>
+                        )}
+                      </div>
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1.5">Title <span className="text-slate-600">(optional)</span></label>
+                        <input
+                          type="text"
+                          value={data.title || ''}
+                          onChange={e => setMetadata(prev => ({...prev, [pid]: {...prev[pid], title: e.target.value}}))}
+                          placeholder={`Enter title for ${p.name}...`}
+                          className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 transition-all text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1.5">Description / Hashtags <span className="text-slate-600">(optional)</span></label>
+                        <textarea
+                          value={data.desc || ''}
+                          onChange={e => setMetadata(prev => ({...prev, [pid]: {...prev[pid], desc: e.target.value}}))}
+                          rows="3"
+                          placeholder={`Caption and hashtags for ${p.name}...`}
+                          className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 resize-none transition-all text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-slate-400 mb-1.5 flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5" /> Schedule Date & Time</label>
+                        <input
+                          type="datetime-local"
+                          value={data.scheduleAt || ''}
+                          onChange={e => setMetadata(prev => ({...prev, [pid]: {...prev[pid], scheduleAt: e.target.value}}))}
+                          className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-3 text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 transition-all text-sm [color-scheme:dark]"
+                        />
+                      </div>
+                    </div>
+                  );
+                })
+              )}
 
               {/* Error / Success */}
               {createError && (

@@ -5,23 +5,25 @@ const prisma = new PrismaClient();
 // POST /api/posts — Create a new scheduled post
 exports.createPost = async (req, res) => {
   try {
-    const { profileId, cloudinaryUrl, platforms, title, description, scheduledAt } = req.body;
+    const { profileId, cloudinaryUrl, platformsData } = req.body;
+    // platformsData should be an array of objects: 
+    // [{ platform: 'TIKTOK', title: '...', description: '...', scheduledAt: '...' }]
 
-    if (!profileId || !cloudinaryUrl || !platforms?.length || !scheduledAt) {
-      return res.status(400).json({ error: 'profileId, cloudinaryUrl, platforms, and scheduledAt are required.' });
+    if (!profileId || !cloudinaryUrl || !platformsData?.length) {
+      return res.status(400).json({ error: 'profileId, cloudinaryUrl, and platformsData are required.' });
     }
 
-    // Create one post record per platform
+    // Create one post record per platform with its specific details
     const created = await Promise.all(
-      platforms.map((platform) =>
+      platformsData.map((data) =>
         prisma.post.create({
           data: {
             profileId,
             cloudinaryUrl,
-            platform,
-            title: title || null,
-            description: description || null,
-            scheduledAt: new Date(scheduledAt),
+            platform: data.platform,
+            title: data.title || null,
+            description: data.description || null,
+            scheduledAt: new Date(data.scheduledAt),
             status: 'PENDING',
           },
         })
