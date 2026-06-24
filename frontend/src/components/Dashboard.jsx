@@ -178,7 +178,7 @@ export default function Dashboard() {
         const chunk = videoFile.slice(start, end + 1);
 
         const formData = new FormData();
-        formData.append('file', chunk);
+        formData.append('file', chunk, videoFile.name);
         formData.append('signature', sigData.signature);
         formData.append('timestamp', sigData.timestamp);
         formData.append('api_key', sigData.apiKey);

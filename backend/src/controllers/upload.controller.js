@@ -30,6 +30,7 @@ exports.getSignedUploadUrl = async (req, res) => {
       timestamp,
       cloudName: process.env.CLOUDINARY_CLOUD_NAME,
       apiKey: process.env.CLOUDINARY_API_KEY,
+      apiSecret: process.env.CLOUDINARY_API_SECRET,
     });
   } catch (error) {
     console.error('Signature generation error:', error);
